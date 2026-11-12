@@ -341,8 +341,8 @@ export function Stage({
         const opacity = useStore.getState().viewOptions.pixelGrid ? pixelGridOpacity(vp.zoom) : 0
         pixels.hidden = opacity === 0
         pixels.style.opacity = String(opacity)
-        /* the frames' own grids read the same fade */
-        stage.style.setProperty('--pixel-grid', String(opacity))
+        /* the frames' own grids read the same fade — they sit under world */
+        world.style.setProperty('--pixel-grid', String(opacity))
         pixels.style.backgroundSize = `${vp.zoom}px ${vp.zoom}px`
         const px = (((vp.x % vp.zoom) + vp.zoom) % vp.zoom) - vp.zoom
         const py = (((vp.y % vp.zoom) + vp.zoom) % vp.zoom) - vp.zoom

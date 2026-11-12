@@ -82,6 +82,7 @@ import { encryptionConfigured } from './secretBox.ts'
 import * as authSchema from './db/auth-schema.ts'
 import * as persist from './db/persist.ts'
 import { handleMcpRequest } from './mcp.ts'
+import { RendererBusyError } from './renderBrowser.ts'
 import {
   getAsset,
   reconcileAssetRefs,
@@ -397,6 +398,13 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }))
 app.get('/healthz/store', (_req, res) => {
   res.json(store.stats())
 })
+/* The headless renderer's counters, for an uptime check that alerts when
+   renders stop (kills climbing, a queue that never drains). Lazy, so a boot
+   never pays for puppeteer-core just to answer it. */
+app.get('/healthz/renderer', async (_req, res) => {
+  const { rendererStatus } = await import('./screenshot.ts')
+  res.json(rendererStatus())
+})
 
 /* ------------------------------------------------------------------ */
 /* PostHog relay: the client sends analytics + session-replay traffic  */
@@ -463,6 +471,16 @@ app.use('/relay', async (req, res) => {
 /* render dispatch live in previews.ts — this route is HTTP only.      */
 /* ------------------------------------------------------------------ */
 
+/** A full render queue is a 503 with Retry-After, not a 500: the renderer is
+ *  healthy, only busy, and the client should come back in a few seconds. */
+function sendRenderFailure(res: express.Response, error: unknown, fallback = 'render failed') {
+  if (error instanceof RendererBusyError) {
+    res.set('Retry-After', '10')
+    return res.status(503).json({ error: error.message })
+  }
+  return res.status(500).json({ error: error instanceof Error ? error.message : fallback })
+}
+
 app.get('/i/:id.:ext', async (req, res) => {
   const { id, ext } = req.params as { id: string; ext: string }
   if (ext !== 'png' && ext !== 'jpg') return res.status(404).end()
@@ -491,7 +509,7 @@ app.get('/i/:id.:ext', async (req, res) => {
         !!(await auth.api.getSession({ headers: fromNodeHeaders(req.headers) }).catch(() => null)),
     })
   } catch (e) {
-    return res.status(500).json({ error: e instanceof Error ? e.message : 'render failed' })
+    return sendRenderFailure(res, e)
   }
   if (result.status === 'rate-limited') {
     res.set('Retry-After', '60')
@@ -2875,7 +2893,7 @@ app.get('/api/frames/:id/screenshot.png', async (req, res) => {
     const png = await renderFrame(frame, fitExportScale(frame, parseExportScale(req.query.scale) ?? 1))
     res.type('png').send(png)
   } catch (e) {
-    res.status(500).json({ error: e instanceof Error ? e.message : 'render failed' })
+    sendRenderFailure(res, e)
   }
 })
 
@@ -2906,7 +2924,7 @@ app.get('/api/canvases/:id/export.pdf', async (req, res) => {
     return res.send(buf)
   } catch (e) {
     if (e instanceof pdf.PdfRendererUnavailableError) return res.status(503).json({ error: e.message })
-    return res.status(500).json({ error: e instanceof Error ? e.message : 'PDF export failed' })
+    return sendRenderFailure(res, e, 'PDF export failed')
   }
 })
 

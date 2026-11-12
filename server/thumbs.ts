@@ -1,5 +1,5 @@
 import { PREVIEW_MAX_HEIGHT, type Frame } from '../shared/types.ts'
-import { withRenderSlot } from './renderLimit.ts'
+import { withRenderSlot } from './renderLimits.ts'
 import * as storage from './storage.ts'
 import { store } from './store.ts'
 
@@ -45,6 +45,8 @@ function render(frame: Frame): Promise<Buffer> {
       type: 'jpeg',
       quality: 70,
       maxHeight: PREVIEW_MAX_HEIGHT,
+      /* a dashboard tile can wait; an agent's screenshot should not */
+      priority: 'background',
     })
   })
 }

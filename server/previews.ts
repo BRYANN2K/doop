@@ -1,6 +1,6 @@
 import { env } from './env.ts'
 import type { Frame } from '../shared/types.ts'
-import { withRenderSlot } from './renderLimit.ts'
+import { withRenderSlot } from './renderLimits.ts'
 import * as thumbs from './thumbs.ts'
 import { store } from './store.ts'
 

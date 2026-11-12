@@ -4,6 +4,15 @@ import path from 'node:path'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import type { Frame } from '../shared/types.ts'
 import { guardPublicPageRequests } from './publicUrl.ts'
+import { renderedHeight } from './renderLimits.ts'
+import {
+  createRenderer,
+  remoteConnectFailure,
+  withDeadline,
+  type PageOptions,
+  type RenderPage,
+  type RendererStatus,
+} from './renderBrowser.ts'
 
 /**
  * Render a frame's HTML in headless Chrome so agents can *see* their work.
@@ -39,142 +48,28 @@ export function findBrowserPath(): string | null {
   return null
 }
 
+/** Whether the server has a browser to render with: a remote one
+ *  (REMOTE_BROWSER_URL) or a local executable. */
+export function rendererAvailable(): boolean {
+  return !!env.REMOTE_BROWSER_URL || findBrowserPath() !== null
+}
+
 function findBrowser(): string {
   const path = findBrowserPath()
   if (!path) throw new Error('No Chrome/Chromium found. Set CHROME_PATH to a browser executable.')
   return path
 }
 
-let browserPromise: Promise<Browser> | null = null
-
-/** Bounds every step a wedged Chromium can stall on. Exported so tests can
- *  shorten them; production keeps these values. */
-export const renderTuning = {
-  /** one render attempt, page creation to encoded bytes */
-  renderTimeoutMs: 20_000,
-  /** the liveness probe a reused browser must answer before it is handed out */
-  pingTimeoutMs: 2_000,
-  /** tearing down a browser context */
-  closeTimeoutMs: 5_000,
-}
-
-export class RenderTimeoutError extends Error {
-  constructor(step: string, ms: number) {
-    super(`${step} did not finish within ${ms}ms`)
-    this.name = 'RenderTimeoutError'
-  }
-}
-
-function withDeadline<T>(work: Promise<T>, ms: number, step: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new RenderTimeoutError(step, ms)), ms)
-    work.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (error: unknown) => {
-        clearTimeout(timer)
-        reject(error)
-      },
-    )
-  })
-}
-
-/** The hosted server's one long-lived Chromium has been seen to stop creating
- *  pages while its DevTools socket stays open: `connected` says yes, every
- *  `newPage` waits 30s for a target that never comes. Such a browser is
- *  dropped from the cache and killed, so the next caller launches a fresh one. */
-function discardBrowser(browser: Browser): void {
-  if (browserPromise) {
-    const cached = browserPromise
-    cached.then(
-      (b) => {
-        if (b === browser && browserPromise === cached) browserPromise = null
-      },
-      () => {},
-    )
-  }
-  const child = browser.process()
-  browser
-    .close()
-    .catch(() => {})
-    .finally(() => {
-      if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
-    })
-}
-
-/** Did the failure come from the browser rather than the frame? A stall, a
- *  closed target or a broken DevTools session all mean the browser is gone
- *  for good; a fresh one may well succeed. */
-export function isBrowserFailure(error: unknown): boolean {
-  if (error instanceof RenderTimeoutError) return true
-  if (!(error instanceof Error)) return false
-  return (
-    error.name === 'TargetCloseError' ||
-    error.name === 'ProtocolError' ||
-    /Target closed|Session closed|Protocol error|Connection closed|waiting for target|Browser was disconnected|Navigating frame was detached/i.test(
-      error.message,
-    )
-  )
-}
-
-async function pingBrowser(browser: Browser): Promise<boolean> {
-  if (!browser.connected) return false
-  try {
-    await withDeadline(browser.version(), renderTuning.pingTimeoutMs, 'browser liveness check')
-    return true
-  } catch {
-    return false
-  }
-}
-
-export async function getBrowser(): Promise<Browser> {
-  if (browserPromise) {
-    const b = await browserPromise
-    if (await pingBrowser(b)) return b
-    discardBrowser(b)
-    browserPromise = null
-  }
-  const launching = launchBrowser()
-  browserPromise = launching
-  /* a launch that failed (a slow cold start past puppeteer's timeout) must not
-     be handed to every later caller: the next one tries again */
-  launching.catch(() => {
-    if (browserPromise === launching) browserPromise = null
-  })
-  return launching
-}
-
-/** Run a render against the shared browser, under the render deadline. When
- *  the attempt fails for a reason that points at the browser, that browser is
- *  discarded and the work runs once more on a fresh launch. */
-export async function withBrowserRetry<T>(step: string, work: (browser: Browser) => Promise<T>): Promise<T> {
-  const attempt = async () => {
-    const browser = await getBrowser()
-    try {
-      return await withDeadline(work(browser), renderTuning.renderTimeoutMs, step)
-    } catch (error) {
-      if (isBrowserFailure(error)) discardBrowser(browser)
-      throw error
-    }
-  }
-  try {
-    return await attempt()
-  } catch (error) {
-    if (!isBrowserFailure(error)) throw error
-    console.warn(`${step}: browser failed (${error instanceof Error ? error.message : String(error)}), relaunching`)
-    return attempt()
-  }
-}
-
 /** A fresh headless Chrome with the server's flags. `timeout` bounds the wait
- *  for its DevTools endpoint (puppeteer's default, 30s, unless given). */
-export function launchBrowser(timeout?: number): Promise<Browser> {
+ *  for its DevTools endpoint (puppeteer's default, 30s, unless given);
+ *  `protocolTimeout` bounds every DevTools command (puppeteer's 180s unless
+ *  given). */
+export function launchBrowser(timeout?: number, protocolTimeout?: number): Promise<Browser> {
   return puppeteer.launch({
     executablePath: findBrowser(),
     headless: true,
     timeout,
+    protocolTimeout,
     args: [
       '--no-first-run',
       '--disable-extensions',
@@ -188,78 +83,120 @@ export function launchBrowser(timeout?: number): Promise<Browser> {
   })
 }
 
-export interface IsolatedPage {
-  page: Page
-  close: () => Promise<void>
+/* a stuck DevTools command fails in a minute rather than puppeteer's three,
+   so the renderer's health probe gets to judge the browser sooner */
+const PROTOCOL_TIMEOUT_MS = 60_000
+
+/** One render attempt, page open to encoded bytes. */
+const RENDER_TIMEOUT_MS = 45_000
+
+/* a remote session is billed while it is open: close it this long after its
+   last page, well inside the provider's own idle timeout (Cloudflare: 60s) */
+const REMOTE_IDLE_CLOSE_MS = 30_000
+const REMOTE_CONNECT_TIMEOUT_MS = 30_000
+/* closing a heavy page's context is a round trip that waits on the page's
+   teardown: a remote one took over 5s after a full website import */
+const REMOTE_CLOSE_TIMEOUT_MS = 15_000
+
+/** A Chrome somewhere else, over the DevTools protocol (REMOTE_BROWSER_URL).
+ *  Everything past the connect is the same puppeteer API a local one has. */
+export function connectRemoteBrowser(url: string, token: string | undefined): Promise<Browser> {
+  const connecting = puppeteer.connect({
+    browserWSEndpoint: url,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    protocolTimeout: PROTOCOL_TIMEOUT_MS,
+  })
+  return withDeadline(connecting, REMOTE_CONNECT_TIMEOUT_MS, 'connecting to the remote browser').catch(
+    (error: unknown) => {
+      /* a session that opens after its deadline is still billed: close it */
+      connecting.then(
+        (late) => void late.close().catch(() => {}),
+        () => {},
+      )
+      throw remoteConnectFailure(error)
+    },
+  )
 }
+
+const remoteBrowserUrl = env.REMOTE_BROWSER_URL
+
+const renderer = createRenderer({
+  launch: () =>
+    remoteBrowserUrl
+      ? connectRemoteBrowser(remoteBrowserUrl, env.REMOTE_BROWSER_TOKEN)
+      : launchBrowser(undefined, PROTOCOL_TIMEOUT_MS),
+  tuning: {
+    maxConcurrent: Math.max(1, env.RENDER_CONCURRENCY),
+    ...(remoteBrowserUrl ? { idleCloseMs: REMOTE_IDLE_CLOSE_MS, closeTimeoutMs: REMOTE_CLOSE_TIMEOUT_MS } : {}),
+  },
+})
+
+/** The live shared browser, launched if need be. */
+export function getBrowser(): Promise<Browser> {
+  return renderer.browser()
+}
+
+/** Counters for logs and health checks. */
+export function rendererStatus(): RendererStatus {
+  return renderer.status()
+}
+
+export type IsolatedPage = Pick<RenderPage, 'page' | 'close'>
 
 /** External pages never share cookies, cache or service workers across users
- *  or imports. Closing the wrapper tears down the entire browser context. */
-export async function openIsolatedPage(browser?: Browser): Promise<IsolatedPage> {
-  const b = browser ?? (await getBrowser())
-  const context = await b.createBrowserContext()
-  try {
-    const page = await context.newPage()
-    let closed = false
-    return {
-      page,
-      close: async () => {
-        if (closed) return
-        closed = true
-        /* a wedged browser stalls here too; the deadline keeps the caller's
-           finally from hanging on the teardown */
-        await withDeadline(context.close(), renderTuning.closeTimeoutMs, 'closing the page').catch(() => {})
-      },
-    }
-  } catch (error) {
-    await context.close().catch(() => {})
-    throw error
-  }
+ *  or imports. Closing the wrapper tears down the entire browser context and
+ *  returns the page's render slot; a page that is never closed is closed for
+ *  its caller when its lease runs out (see renderBrowser.ts). */
+export function openIsolatedPage(options?: PageOptions): Promise<IsolatedPage> {
+  return renderer.openPage(options)
 }
 
-export async function loadFramePage(frame: Frame, browser?: Browser): Promise<IsolatedPage> {
-  const loaded = await openIsolatedPage(browser)
-  const { page } = loaded
+export async function loadFramePage(frame: Frame, options?: PageOptions): Promise<IsolatedPage> {
+  const loaded = await openIsolatedPage(options)
   try {
-    const assetOrigin = new URL(env.BETTER_AUTH_URL).origin
-    await guardPublicPageRequests(page, {
-      allowUrl: (url) =>
-        (url.origin === assetOrigin && url.pathname.startsWith('/a/')) ||
-        /* webfonts referenced by imported frames (imports request the
-           source design's families from Google Fonts) */
-        url.origin === 'https://fonts.googleapis.com' ||
-        url.origin === 'https://fonts.gstatic.com',
-    })
-    await page.setViewport({
-      width: Math.max(1, Math.round(frame.width)),
-      /* A viewport does not need to span an entire imported landing page for
-         layout/computed-style inspection; full-page content remains in the DOM. */
-      height: Math.max(1, Math.min(Math.round(frame.height), 4000)),
-      deviceScaleFactor: 1,
-    })
-    /* setContent leaves the page on about:blank, where the relative /a/...
-       asset URLs of imported frames resolve nowhere. In the app an iframe
-       inherits the page origin; here a <base> stands in for it — unless the
-       frame brought its own (website imports do). */
-    let html = frame.html || '<!doctype html><html><body></body></html>'
-    if (!/<base\s/i.test(html)) {
-      const baseTag = `<base href="${assetOrigin.replace(/"/g, '&quot;')}/">`
-      html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`) : baseTag + html
-    }
-    try {
-      await page.setContent(html, {
-        waitUntil: 'load',
-        timeout: 8000,
-      })
-    } catch {
-      /* Slow external resources: inspect whatever has rendered. */
-    }
-    await new Promise((resolve) => setTimeout(resolve, 120))
+    await loadFrameInto(loaded.page, frame)
     return loaded
   } catch (error) {
     await loaded.close()
     throw error
   }
+}
+
+async function loadFrameInto(page: Page, frame: Frame): Promise<void> {
+  const assetOrigin = new URL(env.BETTER_AUTH_URL).origin
+  await guardPublicPageRequests(page, {
+    allowUrl: (url) =>
+      (url.origin === assetOrigin && url.pathname.startsWith('/a/')) ||
+      /* webfonts referenced by imported frames (imports request the
+         source design's families from Google Fonts) */
+      url.origin === 'https://fonts.googleapis.com' ||
+      url.origin === 'https://fonts.gstatic.com',
+  })
+  await page.setViewport({
+    width: Math.max(1, Math.round(frame.width)),
+    /* A viewport does not need to span an entire imported landing page for
+       layout/computed-style inspection; full-page content remains in the DOM. */
+    height: Math.max(1, Math.min(Math.round(frame.height), 4000)),
+    deviceScaleFactor: 1,
+  })
+  /* setContent leaves the page on about:blank, where the relative /a/...
+     asset URLs of imported frames resolve nowhere. In the app an iframe
+     inherits the page origin; here a <base> stands in for it — unless the
+     frame brought its own (website imports do). */
+  let html = frame.html || '<!doctype html><html><body></body></html>'
+  if (!/<base\s/i.test(html)) {
+    const baseTag = `<base href="${assetOrigin.replace(/"/g, '&quot;')}/">`
+    html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`) : baseTag + html
+  }
+  try {
+    await page.setContent(html, {
+      waitUntil: 'load',
+      timeout: 8000,
+    })
+  } catch {
+    /* Slow external resources: inspect whatever has rendered. */
+  }
+  await new Promise((resolve) => setTimeout(resolve, 120))
 }
 
 export interface FrameInspection {
@@ -286,13 +223,12 @@ export interface FrameInspection {
 /** A compact, rendered representation for agents. It intentionally relies on
  * visible text, semantics, geometry and computed styles rather than classes. */
 export function inspectFrame(frame: Frame): Promise<FrameInspection> {
-  return withBrowserRetry('inspecting the frame', (browser) => inspectFrameOnce(frame, browser))
+  return renderer.withPage('inspecting the frame', RENDER_TIMEOUT_MS, (page) => inspectOn(page, frame))
 }
 
-async function inspectFrameOnce(frame: Frame, browser: Browser): Promise<FrameInspection> {
-  const loaded = await loadFramePage(frame, browser)
-  const { page } = loaded
-  try {
+async function inspectOn(page: Page, frame: Frame): Promise<FrameInspection> {
+  await loadFrameInto(page, frame)
+  {
     /* tsx/esbuild annotates nested functions with __name; page.evaluate
        serializes the callback without that runtime helper. A tiny in-page
        identity shim keeps the evaluated code independent of the loader. */
@@ -485,12 +421,10 @@ async function inspectFrameOnce(frame: Frame, browser: Browser): Promise<FrameIn
       design: inspection.design,
       elements: inspection.elements,
     }
-  } finally {
-    await loaded.close()
   }
 }
 
-export interface RenderOptions {
+export interface RenderOptions extends PageOptions {
   type?: 'png' | 'jpeg'
   quality?: number
   maxHeight?: number
@@ -502,30 +436,31 @@ export function renderFrame(
   scale: number = 1,
   opts: RenderOptions = {},
 ): Promise<Buffer> {
-  return withBrowserRetry('rendering the frame', (browser) => renderFrameOnce(frame, scale, opts, browser))
+  return renderer.withPage(
+    'rendering the frame',
+    RENDER_TIMEOUT_MS,
+    async (page) => {
+      await loadFrameInto(page, frame)
+      return screenshotOn(page, frame, scale, opts)
+    },
+    { priority: opts.priority },
+  )
 }
 
-async function renderFrameOnce(frame: Frame, scale: number, opts: RenderOptions, browser: Browser): Promise<Buffer> {
-  const loaded = await loadFramePage(frame, browser)
-  const { page } = loaded
-  try {
-    await page.setViewport({
-      width: Math.max(1, Math.round(frame.width)),
-      height: Math.max(1, Math.round(frame.height)),
-      deviceScaleFactor: scale,
-    })
-    const type = opts.type ?? 'png'
-    const clip =
-      opts.maxHeight && frame.height > opts.maxHeight
-        ? { x: 0, y: 0, width: Math.round(frame.width), height: Math.round(opts.maxHeight) }
-        : undefined
-    const buf = await page.screenshot({
-      type,
-      ...(type === 'jpeg' ? { quality: opts.quality ?? 90 } : {}),
-      ...(clip ? { clip } : {}),
-    })
-    return Buffer.from(buf)
-  } finally {
-    await loaded.close()
-  }
+async function screenshotOn(page: Page, frame: Frame, scale: number, opts: RenderOptions): Promise<Buffer> {
+  const width = Math.max(1, Math.round(frame.width))
+  const fullHeight = Math.max(1, Math.round(frame.height))
+  const height = renderedHeight(frame, scale, opts.maxHeight)
+  /* the viewport always spans the whole frame, so 100vh, height media
+     queries and bottom-fixed elements lay out as they do on the canvas; the
+     pixel budget bounds only the captured image below */
+  await page.setViewport({ width, height: fullHeight, deviceScaleFactor: scale })
+  const type = opts.type ?? 'png'
+  const clip = height < fullHeight ? { x: 0, y: 0, width, height } : undefined
+  const buf = await page.screenshot({
+    type,
+    ...(type === 'jpeg' ? { quality: opts.quality ?? 90 } : {}),
+    ...(clip ? { clip } : {}),
+  })
+  return Buffer.from(buf)
 }
