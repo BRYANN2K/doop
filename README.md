@@ -53,6 +53,11 @@ runs on **GPT, Claude, Gemini, DeepSeek, Kimi or Qwen** models
   WebSocket room.
 - **Design memory** — pin exemplar frames, capture decisions, and let the distiller propose durable
   style rules that every agent follows.
+- **A plan-first Chat tab** — talk the next design over with the room and `@Doop` before anything
+  touches the canvas: the agent answers in chat and posts a design plan, and only an editor pressing
+  **Go design** turns it into one board card per screen. In the desktop app you can link the canvas
+  to a local project folder and the agent reads it — list, read, search only — while it plans; the
+  path never leaves your machine ([details](desktop/README.md#local-project)).
 - **Private by default** — invite collaborators by email or share a link that can view, comment
   or edit; agents inherit exactly their human's access.
 - **Self-host in one command** — `docker compose up`, or `bun run dev` with zero configuration

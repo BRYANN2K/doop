@@ -227,6 +227,26 @@ shells display an update hint; browser sessions display a desktop-only hint.
 Subscription availability is governed by Anthropic's current terms and account
 policy; an existing CLI login is not a promise of unlimited usage.
 
+## Local project
+
+A canvas can be linked to a folder on this machine so the resident agent reads real code while it
+plans in the canvas's Chat tab. The Agents panel holds the link row: pick a folder in the native
+dialog and the shell remembers a per-device grant. The link is per canvas, per device — another
+install or browser can hold a link of its own, and only a device that is open can serve reads.
+
+The server stores the link's name and device id, never the path: every read is a long-poll request
+the open app picks up (`/api/local-repo/poll`, ~20 s), answers from the local grant, and posts back
+(`/api/local-repo/finish/:id`) before a 60 s TTL expires. Reads are read-only — `repo_list`,
+`repo_read`, `repo_search` are the whole surface; nothing writes, nothing executes. The shell
+sandboxes each answer to the granted root, skips `.git`/`node_modules`, refuses secrets by name
+(`.env*`, `*.pem`, `id_rsa*`, anything matching `credential`/`secret`/key stores) and caps every
+reply (8 levels deep, 2 000 entries, 12 files / 200 KB per read, 100 search matches — see
+`shared/localRepo.ts`). A linked project only answers the person who linked it, on the canvases it
+is linked to; closing the app makes the link offline until it opens again.
+
+The chat chip shows the link and whether reads can be served. An agent planning without an open
+device says so instead of guessing at the code.
+
 ## Build
 
 ```sh
