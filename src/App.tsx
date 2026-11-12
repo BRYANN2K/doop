@@ -1,4 +1,5 @@
 import { startLocalAgent } from './lib/localAgent'
+import { startLocalRepo } from './lib/localRepo'
 import { navigate } from './lib/navigate'
 import { useEffect, useRef, useState } from 'react'
 import { Home } from './pages/Home'
@@ -128,6 +129,11 @@ export function App() {
   const localAgentUser = !isPending && me && !me.impersonating ? session?.user.id : undefined
   useEffect(() => {
     if (localAgentUser) return startLocalAgent(localAgentUser)
+  }, [localAgentUser])
+  /* the local-project poll answers repo_* reads for whoever is signed in;
+     it starts with the app and stands down on sign-out */
+  useEffect(() => {
+    if (localAgentUser) return startLocalRepo()
   }, [localAgentUser])
 
   if (isPending)

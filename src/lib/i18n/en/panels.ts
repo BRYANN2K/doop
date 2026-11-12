@@ -161,6 +161,15 @@ export const panels = {
   activityRetry: 'Retry',
   activityEmpty: 'No activity yet. Add a frame, or connect an agent.',
 
+  localProjectTitle: 'Local project',
+  localProjectLink: 'Link a folder…',
+  localProjectUnlink: 'Unlink',
+  localProjectServed: 'agents can read it while this app is open',
+  localProjectOnline: 'being served by your desktop app',
+  localProjectOffline: 'closed — reads need the Doop desktop app open',
+  localProjectMismatch: 'linked on another device — reads need it open',
+  localProjectLinkHere: 'Link a folder here instead…',
+
   promptSendFailed: 'Something went wrong — try again',
   promptElement: 'element',
   promptTooBig: '“{name}” exceeds the 5 MB limit',

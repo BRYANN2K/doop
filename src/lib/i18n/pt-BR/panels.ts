@@ -161,6 +161,15 @@ export const panels: Catalog['panels'] = {
   activityRetry: 'Tentar de novo',
   activityEmpty: 'Nenhuma atividade ainda. Adicione um frame ou conecte um agente.',
 
+  localProjectTitle: 'Projeto local',
+  localProjectLink: 'Vincular uma pasta…',
+  localProjectUnlink: 'Desvincular',
+  localProjectServed: 'os agentes podem lê-lo enquanto o app estiver aberto',
+  localProjectOnline: 'atendido pelo seu app do desktop',
+  localProjectOffline: 'fechado — a leitura precisa do app Doop aberto',
+  localProjectMismatch: 'vinculado em outro dispositivo — a leitura precisa dele aberto',
+  localProjectLinkHere: 'Vincular uma pasta aqui…',
+
   promptSendFailed: 'Algo deu errado — tente de novo',
   promptElement: 'elemento',
   promptTooBig: '“{name}” excede o limite de 5 MB',

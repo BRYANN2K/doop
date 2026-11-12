@@ -3,6 +3,7 @@ import type { InstanceSettings, InstanceSettingsPatch } from '../../shared/insta
 import { beginFrameSave } from './frameSaves'
 import type { StackWrite } from '../../shared/frameStack'
 import type { LocalAgentPreference, LocalAgentJob, LocalAgentResult } from '../../shared/localAgent'
+import type { RepoLink, RepoLinkStatus, RepoRequest, RepoResult } from '../../shared/localRepo'
 import type { ImageDescriptionMode, ImageDescriptionPreference } from '../../shared/imageDescriptions'
 import type { AgentRunners, RunnerPick, RunnerProvider } from '../../shared/agentRunner'
 import type { CustomProviderConfig, CustomProviderKind } from '../../shared/customProvider'
@@ -426,6 +427,21 @@ export const api = {
       body: JSON.stringify({ deviceId, ...result }),
     }),
   stopLocalAgent: () => req<{ ok: boolean }>('/api/local-agent/stop', { method: 'POST' }),
+  /* the caller's own link between this canvas and a folder on their computer */
+  canvasRepo: (canvasId: string) => req<RepoLinkStatus>(`/api/canvases/${canvasId}/repo`),
+  linkCanvasRepo: (canvasId: string, link: { linkId: string; name: string; deviceId: string }) =>
+    req<{ link: RepoLink }>(`/api/canvases/${canvasId}/repo`, { method: 'POST', body: JSON.stringify(link) }),
+  unlinkCanvasRepo: (canvasId: string) => req<{ ok: boolean }>(`/api/canvases/${canvasId}/repo`, { method: 'DELETE' }),
+  pollLocalRepo: (deviceId: string, grants: string[]) =>
+    req<{ request: RepoRequest | null }>('/api/local-repo/poll', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId, grants }),
+    }),
+  finishLocalRepo: (id: string, deviceId: string, result: RepoResult) =>
+    req<{ ok: boolean }>(`/api/local-repo/finish/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ deviceId, ...result }),
+    }),
   listCanvases: () => req<CanvasMeta[]>('/api/canvases'),
   getCanvas: (id: string) => req<Canvas>(`/api/canvases/${id}`),
   deleteCanvas: (id: string) => req(`/api/canvases/${id}`, { method: 'DELETE' }),
