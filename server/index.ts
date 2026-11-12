@@ -27,6 +27,7 @@ import type { CommentAnchorInput } from '../shared/comments.ts'
 import type { LocaleConfig } from '../shared/locales.ts'
 import { FIRST_CANVAS_PATH, SIGNUP_PARAM, parseSignupMethod } from '../shared/firstCanvas.ts'
 import { localAgentRouter, handleLocalAgentMcp, wake as wakeUserWork } from './localAgent.ts'
+import { deleteLink, linkFor, localRepo, localRepoRouter, putLink } from './localRepo.ts'
 import { handleGeminiCloudMcp } from './geminiCloudMcp.ts'
 import { geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import http from 'node:http'
@@ -1030,6 +1031,7 @@ function requireFrame(
 }
 
 app.use('/api/local-agent', localAgentRouter)
+app.use('/api/local-repo', localRepoRouter)
 app.use('/api/image-descriptions', imageDescriptions.imageDescriptionsRouter)
 app.use('/api/notifications', notificationsRouter)
 app.use('/api/webhooks', webhooksRouter)
@@ -1040,6 +1042,45 @@ app.get('/api/canvases/:id/fonts', (req, res) => {
   const canvas = requireCanvas(req, res, req.params.id, 'view')
   if (canvas) res.json(fontsForCanvas(canvas))
 })
+
+/* ---- a folder on the caller's own computer, linked to this canvas. The
+   server stores only the link — the absolute path stays inside the desktop
+   app's grant file and reads ride the /api/local-repo poll bridge. The link
+   is the caller's own: the agent reads the requester's project. */
+
+app.get('/api/canvases/:id/repo', async (req, res) => {
+  const c = requireCanvas(req, res, req.params.id, 'view')
+  if (!c) return
+  const link = await linkFor(req.user!.id, c.id)
+  const device = localRepo.deviceFor(req.user!.id)
+  res.json({
+    link: link ?? null,
+    online: !!device,
+    deviceMismatch: !!link && !!device && device.id !== link.deviceId,
+  })
+})
+
+app.post('/api/canvases/:id/repo', async (req, res) => {
+  const c = requireCanvas(req, res, req.params.id, 'edit')
+  if (!c) return
+  const parsed = z
+    .object({ linkId: z.string().uuid(), name: z.string().min(1).max(200), deviceId: z.string().uuid() })
+    .safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid link' })
+  const link = await putLink(req.user!.id, c.id, {
+    id: parsed.data.linkId,
+    name: parsed.data.name,
+    deviceId: parsed.data.deviceId,
+  })
+  res.json({ link })
+})
+
+app.delete('/api/canvases/:id/repo', async (req, res) => {
+  const c = requireCanvas(req, res, req.params.id, 'edit')
+  if (!c) return
+  res.json({ ok: await deleteLink(req.user!.id, c.id) })
+})
+
 app.use('/api/admin', adminRouter)
 app.use('/api/community', communityRouter)
 app.use('/api/automations', automationsRouter)
@@ -3136,7 +3177,11 @@ wss.on('connection', (ws, upgradeReq) => {
       }
       const silent = !!(session.session as { impersonatedBy?: string | null }).impersonatedBy
       const prevConn = conns.get(ws)
-      if (prevConn && !prevConn.silent && (prevConn.canvasId !== msg.canvasId || prevConn.presence.clientId !== msg.clientId)) {
+      if (
+        prevConn &&
+        !prevConn.silent &&
+        (prevConn.canvasId !== msg.canvasId || prevConn.presence.clientId !== msg.clientId)
+      ) {
         broadcast(prevConn.canvasId, { type: 'presence:leave', clientId: prevConn.presence.clientId })
       }
       conns.set(ws, { ws, canvasId: msg.canvasId, userId: session.user.id, presence, silent })
