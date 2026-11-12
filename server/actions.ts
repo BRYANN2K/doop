@@ -7,7 +7,14 @@ import * as persist from './db/persist.ts'
 import * as thumbs from './thumbs.ts'
 import { colorFor } from '../shared/types.ts'
 import type { StackWrite } from '../shared/frameStack.ts'
-import { DEFAULT_ROLE_ID, mentionedRole, normalizePipeline, roleByAgentName, roleName } from '../shared/agents.ts'
+import {
+  DEFAULT_ROLE_ID,
+  mentionedRole,
+  normalizePipeline,
+  roleByAgentName,
+  roleById,
+  roleName,
+} from '../shared/agents.ts'
 import { canvasPages } from '../shared/pages.ts'
 import { FRAME_COMMENT_SELECTOR, isCanvasComment, type CommentAnchorInput } from '../shared/comments.ts'
 import { isElementId } from '../shared/elementId.ts'
@@ -1161,6 +1168,9 @@ export interface ChatPostInput {
   plan?: ChatPlan
   /** the composer's model pick for an ask */
   runner?: RunnerPick
+  /** an editor's line in the Chat tab: asks the default agent when no
+   *  @mention names one */
+  askAgent?: boolean
 }
 
 /** One line into the log. Human text is scanned for an @mention — the agent
@@ -1175,7 +1185,9 @@ export function postChatMessage(canvasId: string, input: ChatPostInput): ChatMes
     if (!ref || ref.canvasId !== canvasId) return undefined
     threadId = chatThreadId(ref)
   }
-  const mentioned = input.agent ? undefined : mentionedRole(clean)
+  const mentioned = input.agent
+    ? undefined
+    : (mentionedRole(clean) ?? (input.askAgent ? roleById(DEFAULT_ROLE_ID) : undefined))
   const list = chatLog.get(canvasId) ?? []
   /* strictly increasing per canvas: thread order is reconstructed from `at`
      after a restart, so two messages must never share a timestamp */

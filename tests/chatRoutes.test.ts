@@ -42,7 +42,8 @@ describe('history and send', () => {
     expect(res.status).toBe(200)
     const message = await res.json()
     expect(message).toMatchObject({ canvasId, from: 'Owner', text: 'first thought' })
-    expect(message.forAgent).toBeUndefined()
+    /* the Chat tab talks to Doop: an editor's line asks the agent with no @mention */
+    expect(message.forAgent).toBe(true)
     const history = await (await owner.get(`/api/canvases/${canvasId}/chat`)).json()
     expect(history.map((m: { id: string }) => m.id)).toEqual([message.id])
   })

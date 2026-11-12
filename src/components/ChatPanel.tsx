@@ -554,7 +554,7 @@ function ChatComposer({ canvasId }: { canvasId: string }) {
         onChange={(e) => setText(e.target.value)}
       />
       <div className="flex items-center gap-1">
-        <span className="flex-1 text-caption text-ink-ghost">{canEdit && t('panels.chatMentionHint')}</span>
+        <span className="flex-1" />
         {canEdit && <ModelPicker disabled={sending} />}
         <IconButton
           variant="primary"

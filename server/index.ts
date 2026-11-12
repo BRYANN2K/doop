@@ -2713,7 +2713,13 @@ app.get('/api/canvases/:id/chat', (req, res) => {
 })
 
 app.post('/api/canvases/:id/chat', async (req, res) => {
-  if (!requireCanvas(req, res, req.params.id, 'comment')) return
+  const chatCanvas = requireCanvas(req, res, req.params.id, 'comment')
+  if (!chatCanvas) return
+  /* the Chat tab is a conversation with Doop: an editor's line asks the
+     agent even without an @mention (viewers and commenters still talk to
+     the room, and an explicit @mention picks another agent) */
+  const chatRole = canvasRole(req.user!.id, chatCanvas)
+  const askAgent = !!chatRole && roleAllows(chatRole, 'edit')
   const text = String(req.body?.text ?? '')
   if (!text.trim()) return res.status(400).json({ error: 'empty text' })
   const threadId = typeof req.body?.threadId === 'string' ? req.body.threadId : undefined
@@ -2724,7 +2730,7 @@ app.post('/api/canvases/:id/chat', async (req, res) => {
   if (refuseAgentMention(req, res, req.params.id, text)) return
   /* an @mention asks the resident agent for work — metered like a comment's */
   let gate: Awaited<ReturnType<typeof allowance.consumeResidentTask>> | undefined
-  if (mentionedRole(text)) {
+  if (mentionedRole(text) || askAgent) {
     gate = await allowance.consumeResidentTask(req.user!.id)
     if (!gate.ok) {
       return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
@@ -2738,6 +2744,7 @@ app.post('/api/canvases/:id/chat', async (req, res) => {
     text,
     threadId,
     ...(runner ? { runner } : {}),
+    ...(askAgent ? { askAgent: true } : {}),
   })
   if (!message) {
     if (gate) {

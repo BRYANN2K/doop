@@ -103,6 +103,19 @@ describe('the ask joins the resident queue', () => {
   })
 })
 
+describe('the Chat tab talks to Doop', () => {
+  it('an editor line with no @mention still asks the default agent', () => {
+    const m = actions.postChatMessage(canvasId, { from: 'alice', fromUserId: 'alice', text: 'Test', askAgent: true })!
+    expect(m.forAgent).toBe(true)
+    expect(m.targetAgent).toBe(AGENT)
+  })
+
+  it('without askAgent a plain line stays with the room', () => {
+    const m = actions.postChatMessage(canvasId, { from: 'carol', fromUserId: 'carol', text: 'hello' })!
+    expect(m.forAgent).toBeUndefined()
+  })
+})
+
 describe('claiming', () => {
   it('claims only this payer’s asks, oldest first', () => {
     const a1 = ask('one', 'alice')
