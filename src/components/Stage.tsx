@@ -1,13 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type RefObject,
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { roleOf, toolAllowed, useStore, type Viewport } from '../lib/store'
 import { usePaper, type Paper } from '../lib/paper'
 import { roleAllows } from '../../shared/canvasRole'
@@ -16,7 +7,7 @@ import type { Frame } from '../../shared/types'
 import { usePageCanvas, currentPageCanvas } from '../lib/pages'
 import { sendWs } from '../lib/ws'
 import { throttle } from '../lib/throttle'
-import { useLiveFrameIds } from '../lib/frameCulling'
+import { type FrameLod } from '../lib/frameLod'
 import { FrameView, HiddenFrameView } from './FrameView'
 import { CanvasComments, type CanvasComposeAt } from './CanvasComments'
 import { placeComposer } from '../lib/composerPlacement'
@@ -32,6 +23,7 @@ import { cameraOnCursor, cameraToFollow } from '../lib/follow'
 import { SnapGuides } from './SnapGuides'
 import { GuideLines, Rulers } from './Rulers'
 import { useIsMobile } from '../hooks/use-mobile'
+import { useFrameLods } from '../hooks/use-frame-lods'
 import { isTypingTarget, MOD_KEY } from '../lib/keys'
 import { cn } from '../lib/utils'
 import { gesture } from '../lib/gesture'
@@ -58,13 +50,14 @@ import { TOOLS, isDrawingTool, resolvePointerAction, toolForKey, type Tool } fro
 import { useCanvasDrawing } from './CanvasDrawing'
 import { FrameLabelLayer } from './FrameLabelLayer'
 import { pixelGridLines } from './PixelGrid'
-import { layoutZoomFor } from '../lib/layoutZoom'
+import { CAMERA_SETTLE_MS, layoutZoomFor } from '../lib/layoutZoom'
 import { useT, type PlainMessageKey } from '../lib/i18n'
 import { NO_INSETS, fitBox, type StageInsets } from '../lib/viewFit'
 import { spaceWouldScroll } from '../lib/spaceScroll'
 import { ZOOM_DRAG_MIN, ZOOM_TOOL_STEP, zoomAtPoint, zoomToBox } from '../lib/zoomTool'
 
 const MIN_ZOOM = 0.08
+const NO_FRAMES: Frame[] = []
 /* The settled world is laid out at up to this zoom too (layoutZoomFor), so
    the desktop app stays sharp all the way in. That costs little: WebKit and
    Chromium both tile what is on screen, so backing memory follows the
@@ -248,6 +241,7 @@ export function Stage({
   const zoomLabelRef = useRef<HTMLSpanElement>(null)
   const setViewport = useStore((s) => s.setViewport)
   const canvas = usePageCanvas()
+  const lods = useFrameLods(ref, canvas?.frames ?? NO_FRAMES)
   const activePageId = useStore((s) => s.activePageId)
   /* a page with a colour of its own paints the stage, dots in its contrast */
   const paper = usePaper()
@@ -350,7 +344,7 @@ export function Stage({
       window.clearTimeout(settle)
       settle = window.setTimeout(() => {
         setLayoutZoom(layoutZoomFor(useStore.getState().viewport.zoom, MAX_ZOOM))
-      }, 250)
+      }, CAMERA_SETTLE_MS)
     })
     return () => {
       unsub()
@@ -1174,7 +1168,7 @@ export function Stage({
               ref={worldRef}
             >
               <FrameLabelLayer.Provider value={labelLayer}>
-                <FrameStack frames={canvas?.frames ?? []} layoutZoom={layoutZoom} stage={ref} />
+                <FrameStack frames={canvas?.frames ?? []} layoutZoom={layoutZoom} lods={lods} />
               </FrameLabelLayer.Provider>
               <GhostFrames />
               <FlowOverlay />
@@ -1382,22 +1376,27 @@ function byCreation(a: Frame, b: Frame) {
 function FrameStack({
   frames,
   layoutZoom,
-  stage,
+  lods,
 }: {
   frames: Frame[]
   layoutZoom: number
-  stage: RefObject<HTMLElement | null>
+  lods: ReadonlyMap<string, FrameLod>
 }) {
   const mounted = useMemo(() => [...frames].sort(byCreation), [frames])
   const rank = useMemo(() => new Map(frames.map((f, i) => [f.id, i + 1])), [frames])
-  const live = useLiveFrameIds(frames, stage)
   return (
     <div className="absolute top-0 left-0 isolate">
       {mounted.map((f) =>
         f.hidden ? (
           <HiddenFrameView key={f.id} frame={f} stack={rank.get(f.id)} />
         ) : (
-          <FrameView key={f.id} frame={f} stack={rank.get(f.id)} layoutZoom={layoutZoom} live={live.has(f.id)} />
+          <FrameView
+            key={f.id}
+            frame={f}
+            stack={rank.get(f.id)}
+            layoutZoom={layoutZoom}
+            lod={lods.get(f.id) ?? 'none'}
+          />
         ),
       )}
     </div>

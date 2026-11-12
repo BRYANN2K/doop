@@ -81,7 +81,7 @@
               { value: labelLayer },
               /* ranked in paint order, the way the Stage's FrameStack stacks them */
               frames.map((f, i) =>
-                React.createElement(FrameView, { key: f.id, frame: f, stack: i + 1, layoutZoom: k }),
+                React.createElement(FrameView, { key: f.id, frame: f, stack: i + 1, layoutZoom: k, lod: 'live' }),
               ),
             ),
           ),

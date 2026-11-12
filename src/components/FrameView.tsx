@@ -18,6 +18,7 @@ import { throttle } from '../lib/throttle'
 import { getIdentity } from '../lib/identity'
 import { FRAME_BOOTSTRAP } from '../lib/frameRuntime'
 import { FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY, counterZoom } from '../lib/layoutZoom'
+import { frameImageUrl, type FrameLod } from '../lib/frameLod'
 import { dropEntry, recordCreate, recordUpdate, recordUpdates, trackSave, type HistoryEntry } from '../lib/history'
 import { snapFrame } from '../lib/snap'
 import { visibleGuides } from '../lib/guides'
@@ -273,20 +274,19 @@ interface HoverHit {
 
 /* Counter-scaled overlays (labels, pins, popovers) get their scale from the
    `--zoom` CSS variable the Stage sets, so a viewport change never re-renders
-   this component — memo holds as long as the frame and layout zoom are unchanged. */
+   this component — memo holds as long as the frame, layout zoom and lod are unchanged. */
 export const FrameView = memo(function FrameView({
   frame,
   stack,
   layoutZoom,
-  live = true,
+  lod,
 }: {
   frame: Frame
   /** its place in the page's paint order (the Stage's z-index), front highest */
   stack?: number
   layoutZoom: number
-  /** false: off screen or too small to read, so a placeholder stands in for the
-   *  document and no iframe is mounted (src/lib/frameCulling.ts) */
-  live?: boolean
+  /** how the Stage wants the frame drawn (frameLod.ts); an edit in progress keeps it live */
+  lod: FrameLod
 }) {
   const t = useT()
   const [menuTarget, setMenuTarget] = useState<
@@ -343,6 +343,9 @@ export const FrameView = memo(function FrameView({
   /* after exiting edit mode, hold renders until the final serialized HTML
      lands in the store — otherwise a stale post would morph the edit away */
   const [suspendPost, setSuspendPost] = useState(false)
+  /* an edit talks to the document, so it holds the frame live whatever the
+     Stage decided; otherwise the frame shows the server's image of it */
+  const live = lod === 'live' || editing || suspendPost || pathEdit !== null
 
   /* one throttle per frame, so a group drag broadcasts every member —
      a single throttle would keep only the last frame written each tick */
@@ -418,6 +421,9 @@ export const FrameView = memo(function FrameView({
       mode === 'move' &&
       probeOnClick &&
       !skipElement &&
+      /* an image has no document to hit-test: the press selects the frame,
+         which brings its document in, as a frame drag */
+      live &&
       elementMove.start(
         e,
         (press, move, released) => {
@@ -832,13 +838,20 @@ export const FrameView = memo(function FrameView({
   /* the port the runtime relays keys over; see `replayKey` */
   const keyPort = useRef<MessagePort | null>(null)
   /* the document is mounted while the frame is live and has its HTML; going
-     without it takes the iframe, and the runtime with it */
+     without it takes the iframe, and the runtime with it — a later one boots
+     afresh and must announce itself before anything is posted to it */
   const mounted = live && !frame.htmlDeferred
   const [wasMounted, setWasMounted] = useState(mounted)
   if (mounted !== wasMounted) {
     setWasMounted(mounted)
     if (!mounted) setRuntimeReady(false)
   }
+  useEffect(() => {
+    if (mounted) return
+    /* nothing of the old document survives: the next one gets the full HTML */
+    localHtml.current = null
+    noteFrameDocument(frame.id, null)
+  }, [mounted, frame.id])
   useEffect(() => {
     /* a key pressed while the focus sits in this frame's document: replay
        it on the iframe, where it bubbles to the canvas shortcuts as if the
@@ -1896,6 +1909,18 @@ export const FrameView = memo(function FrameView({
                    dark canvas sat on a white square */
                   ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
                 }}
+              />
+            ) : lod === 'image' && frame.html ? (
+              /* the server's render of the current design (frameImageUrl):
+                 one decoded bitmap instead of a whole document. The world's
+                 zoom scales it like any other box, so no counter-zoom. */
+              <img
+                className={cn('block', isCanvasElement(frame.html) ? 'bg-transparent' : 'bg-white')}
+                src={frameImageUrl(frame, isCanvasElement(frame.html))}
+                alt=""
+                draggable={false}
+                decoding="async"
+                style={{ width: frame.width, height: frame.height }}
               />
             ) : (
               /* no document behind it: the frame's last preview render over the
