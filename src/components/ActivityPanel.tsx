@@ -26,6 +26,7 @@ import {
   CommentIcon,
   FolderIcon,
   FolderPlusIcon,
+  MessageSquareIcon,
   PulseIcon,
   SparkIcon,
 } from './ui/icons'
@@ -33,6 +34,7 @@ import { DotMatrix } from './ui/dot-matrix'
 import { Dot } from './ui/dot'
 import { isResidentLimit } from './TeamAllowance'
 import { CommentsPanel } from './CommentsPanel'
+import { ChatPanel } from './ChatPanel'
 import { PromptBar } from './PromptBar'
 import {
   hasLocalRepo,
@@ -87,8 +89,8 @@ export function ActivityPanel({
 }) {
   const setTab = useStore((s) => s.setPanelTab)
   const canEdit = useStore(canEditOpenCanvas)
-  /* someone who cannot edit sees the comments only (PanelTabButtons) */
-  const tab = useStore((s) => (canEdit ? s.panelTab : 'comments'))
+  /* a viewer reads the chat and the comments — the agent tabs stay editor-only */
+  const tab = useStore((s) => (canEdit || s.panelTab === 'chat' ? s.panelTab : 'comments'))
   const [, tick] = useState(0)
   const openThreads = useOpenThreadCount()
   const working = useStore((s) => s.tasks.filter((t) => t.agentName && !t.endedAt && !t.failedAt).length)
@@ -122,6 +124,9 @@ export function ActivityPanel({
                 )}
               </PanelIconTab>
             )}
+            <PanelIconTab value="chat" icon={<MessageSquareIcon />} title={t('panels.activityChatTitle')}>
+              {t('panels.activityChat')}
+            </PanelIconTab>
             <PanelIconTab
               value="comments"
               icon={<CommentIcon />}
@@ -163,6 +168,9 @@ export function ActivityPanel({
           </div>
           {/* the composer briefs agents to change frames: editors only */}
           {canEdit && <PromptBar canvasId={canvasId} />}
+        </PanelTabPanel>
+        <PanelTabPanel value="chat" className={tabEnter}>
+          <ChatPanel canvasId={canvasId} />
         </PanelTabPanel>
         <PanelTabPanel value="comments" className={tabEnter}>
           <CommentsPanel />
