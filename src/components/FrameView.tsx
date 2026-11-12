@@ -127,6 +127,28 @@ const EDITOR_CHIP_TEXT = '@max-[180px]/title:hidden'
 /* the element toolbar's buttons sit on ink and stay compact */
 const EL_TOOLBAR_BTN = 'rounded-[7px] px-2 py-1 text-xs'
 
+/** What a culled frame shows instead of its document: the persisted preview
+ *  render (`/i/<id>.jpg?preview`, the top `PREVIEW_MAX_HEIGHT` px of the frame)
+ *  across the frame's width, so a zoomed-out page reads as its screens and not
+ *  as blank boxes. `version` gives a changed frame a fresh URL past the
+ *  browser cache; a render that fails leaves the hatch underneath. */
+function FramePlaceholderPreview({ frameId, version }: { frameId: string; version: number }) {
+  const src = `/i/${frameId}.jpg?preview&v=${version}`
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  if (failedSrc === src) return null
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      className="block w-full select-none"
+      onError={() => setFailedSrc(src)}
+    />
+  )
+}
+
 /** A hidden frame's place on the stage: nothing, unless it is selected —
  *  then a dashed box with its name, so a pick from the Layers panel still
  *  shows where the frame sits. It takes no pointer events: there is nothing
@@ -256,11 +278,15 @@ export const FrameView = memo(function FrameView({
   frame,
   stack,
   layoutZoom,
+  live = true,
 }: {
   frame: Frame
   /** its place in the page's paint order (the Stage's z-index), front highest */
   stack?: number
   layoutZoom: number
+  /** false: off screen or too small to read, so a placeholder stands in for the
+   *  document and no iframe is mounted (src/lib/frameCulling.ts) */
+  live?: boolean
 }) {
   const t = useT()
   const [menuTarget, setMenuTarget] = useState<
@@ -805,6 +831,14 @@ export const FrameView = memo(function FrameView({
   const [runtimeReady, setRuntimeReady] = useState(false)
   /* the port the runtime relays keys over; see `replayKey` */
   const keyPort = useRef<MessagePort | null>(null)
+  /* the document is mounted while the frame is live and has its HTML; going
+     without it takes the iframe, and the runtime with it */
+  const mounted = live && !frame.htmlDeferred
+  const [wasMounted, setWasMounted] = useState(mounted)
+  if (mounted !== wasMounted) {
+    setWasMounted(mounted)
+    if (!mounted) setRuntimeReady(false)
+  }
   useEffect(() => {
     /* a key pressed while the focus sits in this frame's document: replay
        it on the iframe, where it bubbles to the canvas shortcuts as if the
@@ -837,6 +871,8 @@ export const FrameView = memo(function FrameView({
     function onMsg(ev: MessageEvent) {
       const win = iframeRef.current?.contentWindow
       if (ev.data?.type === 'doop:frame-ready' && win && ev.source === win) {
+        /* a fresh document has shown nothing yet, whatever an earlier one did */
+        localHtml.current = null
         /* once per document: the ready signal arrives before the design's
            HTML, so only the runtime can be listening for the port */
         if (!keyPort.current) {
@@ -1404,6 +1440,7 @@ export const FrameView = memo(function FrameView({
 
   async function enterElementEdit(where: { x: number; y: number } | { selector: string }) {
     if (
+      !runtimeReady ||
       !frame.html ||
       stream ||
       frame.locked ||
@@ -1829,14 +1866,15 @@ export const FrameView = memo(function FrameView({
             }}
             onPointerLeave={leaveHover}
           >
-            <iframe
-              ref={iframeRef}
-              className="relative block border-none bg-transparent"
-              title={frame.name}
-              data-doop-frame=""
-              sandbox="allow-scripts"
-              srcDoc={FRAME_BOOTSTRAP}
-              /* The world is laid out at CSS zoom k (Stage), which an iframe
+            {mounted ? (
+              <iframe
+                ref={iframeRef}
+                className="relative block border-none bg-transparent"
+                title={frame.name}
+                data-doop-frame=""
+                sandbox="allow-scripts"
+                srcDoc={FRAME_BOOTSTRAP}
+                /* The world is laid out at CSS zoom k (Stage), which an iframe
                  passes into its document. Chromium takes it as pixel density:
                  the document keeps its design-px viewport and rasterizes at
                  k×, even out of process, where a transform on this element
@@ -1844,24 +1882,36 @@ export const FrameView = memo(function FrameView({
                  document out at the zoomed width, so there the zoom is undone
                  here (keeping viewport, vh/vw, media queries and runtime rects
                  in design px) and the scale restores the box. */
-              style={{
-                width: frame.width,
-                height: frame.height,
-                ...(FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY
-                  ? null
-                  : { zoom: counterZoom(layoutZoom), transform: `scale(${layoutZoom})` }),
-                transformOrigin: '0 0',
-                /* Chromium paints an opaque backdrop behind an iframe whose
+                style={{
+                  width: frame.width,
+                  height: frame.height,
+                  ...(FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY
+                    ? null
+                    : { zoom: counterZoom(layoutZoom), transform: `scale(${layoutZoom})` }),
+                  transformOrigin: '0 0',
+                  /* Chromium paints an opaque backdrop behind an iframe whose
                    colour scheme differs from its document's; the page's dark
                    scheme reaches this element by inheritance while a
                    standalone element's document is light, so a shape on the
                    dark canvas sat on a white square */
-                ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
-              }}
-            />
+                  ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
+                }}
+              />
+            ) : (
+              /* no document behind it: the frame's last preview render over the
+                 hatch of an empty frame, which shows while it loads or if it fails */
+              <div
+                data-frame-placeholder=""
+                className="absolute inset-0 overflow-hidden bg-[repeating-linear-gradient(45deg,transparent_0_10px,rgba(28,26,21,0.025)_10px_20px)]"
+              >
+                {(frame.htmlDeferred || (frame.html && !isCanvasElement(frame.html))) && (
+                  <FramePlaceholderPreview frameId={frame.id} version={frame.updatedAt} />
+                )}
+              </div>
+            )}
             {/* a standalone element is see-through: the paper's grid shows */}
-            {!isCanvasElement(frame.html) && <PixelGrid layoutZoom={layoutZoom} />}
-            {!frame.html && (
+            {mounted && !isCanvasElement(frame.html) && <PixelGrid layoutZoom={layoutZoom} />}
+            {!frame.html && !frame.htmlDeferred && (
               <div className="absolute inset-0 grid place-items-center bg-[repeating-linear-gradient(45deg,transparent_0_10px,rgba(28,26,21,0.025)_10px_20px)] text-[13px] text-ink-faint">
                 empty frame — add HTML
               </div>

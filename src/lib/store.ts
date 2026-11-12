@@ -10,6 +10,7 @@ import type {
   DesignDecision,
   ElementComment,
   Frame,
+  FrameHtml,
   GuidelineDoc,
   MemoryProposal,
   MemoryReference,
@@ -174,7 +175,9 @@ interface State {
   setPages(pages: import('../../shared/types').CanvasPageInfo[], canvasId?: string): void
   /** paint one page locally (this client's own edit, before or after its save) */
   setPageBackgroundLocal(pageId: string, background: string | null): void
-  setCanvas(c: Canvas | null): void
+  /** `pageId`: where a fresh canvas opens (the page whose frames came with their
+   *  HTML), when it is not the first; a canvas already open keeps its page */
+  setCanvas(c: Canvas | null, pageId?: string): void
   setConnected(v: boolean): void
   setCanvasNotFound(v: boolean): void
   setSignInRequired(v: boolean): void
@@ -200,6 +203,8 @@ interface State {
   upsertComment(c: ElementComment): void
   upsertFrame(f: Frame): void
   patchFrameLocal(frameId: string, patch: Partial<Frame>): void
+  /** the HTML of frames that arrived deferred; a frame already holding its own is left alone */
+  mergeFrameHtml(frames: FrameHtml[]): void
   removeFrame(frameId: string): void
   renameCanvasLocal(name: string): void
   /** upsert (doc set) or remove (doc null) a style guide on the open canvas */
@@ -353,7 +358,7 @@ export const useStore = create<State>((set, get) => ({
   flashes: {},
   streams: {},
 
-  setCanvas: (canvas) =>
+  setCanvas: (canvas, pageId) =>
     set((s) => ({
       /* the stage paints frames in array order: back to front */
       canvas: canvas && { ...canvas, frames: sortByStack(canvas.frames) },
@@ -364,7 +369,7 @@ export const useStore = create<State>((set, get) => ({
       activePageId: canvas
         ? canvas.id === s.canvas?.id && canvasPages(canvas).some((p) => p.id === s.activePageId)
           ? s.activePageId
-          : canvasPages(canvas)[0]!.id
+          : (canvasPages(canvas).find((p) => p.id === pageId) ?? canvasPages(canvas)[0]!).id
         : null,
     })),
   setActivePage: (id) =>
@@ -523,6 +528,20 @@ export const useStore = create<State>((set, get) => ({
       if (!s.canvas) return {}
       const frames = s.canvas.frames.map((f) => (f.id === frameId ? { ...f, ...patch } : f))
       return { canvas: { ...s.canvas, frames: 'z' in patch ? sortByStack(frames) : frames } }
+    }),
+  mergeFrameHtml: (loaded) =>
+    set((s) => {
+      if (!s.canvas) return {}
+      const html = new Map(loaded.map((f) => [f.id, f.html]))
+      let merged = false
+      const frames = s.canvas.frames.map((f) => {
+        const text = f.htmlDeferred ? html.get(f.id) : undefined
+        if (text === undefined) return f
+        merged = true
+        const { htmlDeferred: _deferred, ...whole } = f
+        return { ...whole, html: text }
+      })
+      return merged ? { canvas: { ...s.canvas, frames } } : {}
     }),
   removeFrame: (frameId) =>
     set((s) => {
