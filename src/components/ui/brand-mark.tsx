@@ -17,7 +17,7 @@ import slackLogo from './brand/slack.svg'
  * single-colour marks.
  *
  * Paths: Simple Icons (CC0) for Claude, OpenAI, Cursor and GitHub; Lobe Icons
- * (MIT) for DeepSeek and Kimi; the
+ * (MIT) for DeepSeek, Kimi and OpenCode; the
  * providers' own sign-in branding assets for Google, Apple and Microsoft;
  * each company's brand page for the rest. Wordmarks and tiles that belong to
  * a feature (the automation chain's clock, the integration tiles) stay with
@@ -36,6 +36,7 @@ export type Brand =
   | 'openrouter'
   | 'deepseek'
   | 'kimi'
+  | 'opencode'
   | 'google'
   | 'apple'
   | 'microsoft'
@@ -79,6 +80,8 @@ const KIMI_DOT_PATH =
 
 /** The blue of Kimi's dot. */
 const KIMI_COLOR = '#1783FF'
+/** OpenCode's open square (Lobe Icons, MIT). */
+const OPENCODE_PATH = 'M16 6H8v12h8V6zm4 16H4V2h16v20z'
 
 /** ByteDance's four bars, which its Seed lab (Seedream) wears in a blue-teal blend. */
 const BYTEDANCE_PATH =
@@ -271,6 +274,7 @@ const MARKS: Record<Brand, (props: GlyphProps) => JSX.Element> = {
   openrouter: OpenRouter,
   deepseek: path(DEEPSEEK_PATH, DEEPSEEK_COLOR),
   kimi: Kimi,
+  opencode: path(OPENCODE_PATH),
   google: Google,
   apple: path(APPLE_PATH),
   microsoft: Microsoft,
@@ -295,6 +299,7 @@ export type AppIconBrand =
   | 'openrouter'
   | 'deepseek'
   | 'kimi'
+  | 'opencode'
   | 'seedream'
   | 'codex'
   | 'cursor'
@@ -369,6 +374,7 @@ const APP_TILES: Record<AppIconBrand, AppTile> = {
       </>
     ),
   },
+  opencode: { tile: '#111', glyph: () => <path fill="#fff" d={OPENCODE_PATH} /> },
   /* the knot reversed out of black, beside ChatGPT's black on white */
   codex: { tile: '#111', glyph: () => <path fill="#fff" d={OPENAI_PATH} /> },
   cursor: { tile: '#14120b', glyph: () => <path fill="#fff" d={CURSOR_PATH} /> },
