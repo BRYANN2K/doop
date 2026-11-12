@@ -55,6 +55,15 @@ import { websiteAccessErrorMessage } from './websiteAccess.ts'
 import { executeGuardedBatch } from './guardedBatch.ts'
 import { runRepoCards } from './githubRecon.ts'
 import { retryModelTurn } from './modelTurnRetry.ts'
+import { linkFor, repoToolCall } from './localRepo.ts'
+import {
+  REPO_MAX_DEPTH,
+  REPO_MAX_FILE_BYTES,
+  REPO_MAX_QUERY_CHARS,
+  REPO_MAX_READ_FILES,
+  REPO_MAX_SEARCH_MATCHES,
+  type RepoRequest,
+} from '../shared/localRepo.ts'
 import { recordAgentFeedback } from './agentFeedback.ts'
 import { AGENT_IDEA_CATEGORIES, AGENT_ISSUE_CATEGORIES, type AgentFeedbackCategory } from '../shared/agentFeedback.ts'
 
@@ -215,6 +224,9 @@ interface RunState {
   vision: boolean
   /** whose account pays for generated images: the run's payer, else the server key */
   payerId?: string
+  /** the requester's own user id — set when they linked a local project to
+   *  this canvas, so the repo_* tools read their folder through their app */
+  repoUserId?: string
   /** images actually produced in this run — capped, since each one spends the payer's quota or money */
   imagesGenerated: number
   /** where a new frame goes unless the model says otherwise: the page (and,
@@ -623,6 +635,11 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
        originating pass that changed nothing has not delivered its card */
     const requireMutation = cards.length > 0 && !role.reviewer
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: kickoff }]
+    /* the requester's own linked project (server/localRepo.ts): the repo_*
+       tools ride only when their link exists — their desktop app answers
+       the reads, the path never leaving it */
+    const repoUserId = payer || canvasOwner
+    const repoLink = repoUserId ? await linkFor(repoUserId, canvasId).catch(() => undefined) : undefined
     const runState: RunState = {
       mutatedFrames: new Set(),
       sourceFrames: new Set(),
@@ -631,6 +648,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
       rewriteDrafts: new Map(),
       vision: model.vision !== false,
       ...(model.userId ? { payerId: model.userId } : {}),
+      ...(repoLink && repoUserId ? { repoUserId } : {}),
       imagesGenerated: 0,
       /* a run about a comment delivers on that comment's page */
       ...(comments[0] ? { placement: placementFor(comments[0], canvas) } : {}),
@@ -697,6 +715,24 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
               },
             ]
           : []
+      /* a linked local project means investigate before designing: read its
+         tokens, components and copy, and reuse them rather than inventing */
+      const repoBlock = repoLink
+        ? [
+            {
+              text:
+                `# Linked local project\nThe requester linked the folder "${repoLink.name}" on their computer to ` +
+                `this canvas — you can read it through the repo_* tools, never write or run anything in it. ` +
+                `Before designing, investigate it: repo_list the tree, then repo_read what a design needs — ` +
+                `design tokens, theme or tailwind config, existing components, copy and locale files, ` +
+                `README/AGENTS.md — and repo_search for anything specific. Reuse its real names, tokens and ` +
+                `copy rather than inventing them, and name the files you borrowed from in your final message. ` +
+                `Reads only work while the requester's desktop app is open; if a repo_* call says it is offline, ` +
+                `say so plainly and go on without it.`,
+            },
+          ]
+        : []
+      const runTools = repoLink ? [...TOOLS, ...REPO_TOOLS] : TOOLS
       const noVisionBlock = runState.vision
         ? []
         : [
@@ -715,10 +751,11 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
             ...fontsBlock.map((b) => b.text),
             ...tokensBlock.map((b) => b.text),
             ...componentsBlock.map((b) => b.text),
+            ...repoBlock.map((b) => b.text),
           ].join('\n\n'),
           // Image generation uses a separate paid model account; the local CLI
           // connection must never imply that the user's subscription covers it.
-          tools: TOOLS.filter((tool) => tool.name !== 'generate_image'),
+          tools: runTools.filter((tool) => tool.name !== 'generate_image'),
           maxTurns,
           isCanceled: canceled,
           signal: abort.signal,
@@ -761,9 +798,10 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
                   ...fontsBlock,
                   ...tokensBlock,
                   ...componentsBlock,
+                  ...repoBlock,
                   ...noVisionBlock,
                 ],
-                tools: TOOLS,
+                tools: runTools,
                 messages,
                 signal: abort.signal,
               }),
@@ -1614,6 +1652,60 @@ TOOLS.push({
   },
 })
 
+/* Reads inside the requester's linked local project — offered only when the
+   run's payer has a repo_links row on this canvas (runAgent appends them to
+   the run's tool list; the desktop app answers through server/localRepo.ts).
+   Read-only by construction: there is no repo_write. */
+export const REPO_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'repo_list',
+    description:
+      'List a slice of the linked local project’s file tree — repo-relative paths with kind (file/dir) and size, bounded to one slice. Start here before designing, then repo_read the pieces that matter. Secret-looking files and heavy dirs (.git, node_modules) never appear.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subdir: { type: 'string', description: 'Start directory, relative to the project root; omit for the root' },
+        depth: {
+          type: 'number',
+          description: `Directory levels to open below subdir, 0-${REPO_MAX_DEPTH} (default 4)`,
+        },
+      },
+    },
+  },
+  {
+    name: 'repo_read',
+    description: `Read files from the linked local project — up to ${REPO_MAX_READ_FILES} repo-relative paths per call (e.g. "src/theme.ts", "package.json"), each capped at ${
+      REPO_MAX_FILE_BYTES / 1024
+    }KB. Batch the files you need in one call.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `1-${REPO_MAX_READ_FILES} repo-relative file paths`,
+        },
+      },
+      required: ['paths'],
+    },
+  },
+  {
+    name: 'repo_search',
+    description:
+      'Search the linked local project for a literal string (or a regular expression with regex: true), optionally narrowed by a *-glob like "*.tsx". Returns matching lines with repo-relative paths and line numbers.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: `Text or pattern, 1-${REPO_MAX_QUERY_CHARS} characters` },
+        glob: { type: 'string', description: 'Optional file glob — "*.tsx" matches any file name, "src/*" a path' },
+        regex: { type: 'boolean', description: 'Treat query as a Rust-regex pattern' },
+        limit: { type: 'number', description: `Max matches, 1-${REPO_MAX_SEARCH_MATCHES} (default 50)` },
+      },
+      required: ['query'],
+    },
+  },
+]
+
 function canReadCanvas(userId: string, canvasId: string): boolean {
   const other = store.getCanvas(canvasId)
   return !!other && roleAllows(canvasRole(userId, other), 'view')
@@ -1707,6 +1799,10 @@ export async function execTool(
         actions.setAgentStatus(canvasId, actor, String(input.status ?? ''))
         return ok('ok')
       }
+      case 'repo_list':
+      case 'repo_read':
+      case 'repo_search':
+        return execRepoTool(block, canvasId, runState, fail, ok)
       case 'create_frame': {
         const raw = block.input as {
           name?: string
@@ -2391,4 +2487,60 @@ export async function execTool(
     if (blocked) runState.blockedWebsiteAccess = blocked
     return fail(blocked ?? (e instanceof Error ? e.message : 'tool failed'))
   }
+}
+
+/**
+ * The repo_* tools: resolve the run requester's link, shape the args the
+ * wire expects, and dispatch the read to the device holding the grant
+ * (server/localRepo.ts). The link is re-read each call so an unlink lands
+ * mid-run; an offline device or a missing grant answers as a normal tool
+ * error, which is the design — the agent reports it and designs on.
+ */
+async function execRepoTool(
+  block: Anthropic.ToolUseBlockParam,
+  canvasId: string,
+  runState: RunState,
+  fail: (msg: string) => Anthropic.ToolResultBlockParam,
+  ok: (content: Anthropic.ToolResultBlockParam['content']) => Anthropic.ToolResultBlockParam,
+): Promise<Anthropic.ToolResultBlockParam> {
+  const userId = runState.repoUserId
+  if (!userId) return fail('No local project is linked for this run.')
+  const link = await linkFor(userId, canvasId).catch(() => undefined)
+  if (!link) return fail('The linked project was unlinked — there is nothing to read.')
+  const raw = (block.input ?? {}) as Record<string, unknown>
+  let op: 'list' | 'read' | 'search'
+  let args: RepoRequest['args']
+  if (block.name === 'repo_list') {
+    op = 'list'
+    const subdir = typeof raw.subdir === 'string' && raw.subdir ? raw.subdir : undefined
+    const depth =
+      typeof raw.depth === 'number' && Number.isFinite(raw.depth)
+        ? Math.min(Math.max(0, Math.floor(raw.depth)), REPO_MAX_DEPTH)
+        : undefined
+    args = { ...(subdir ? { subdir } : {}), ...(depth !== undefined ? { depth } : {}) }
+  } else if (block.name === 'repo_read') {
+    op = 'read'
+    const paths = raw.paths
+    if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === 'string' && p.length > 0))
+      return fail(`repo_read needs paths: a list of 1-${REPO_MAX_READ_FILES} repo-relative file paths`)
+    if (paths.length > REPO_MAX_READ_FILES)
+      return fail(`repo_read takes at most ${REPO_MAX_READ_FILES} paths per call — split the list`)
+    args = { paths: paths as string[] }
+  } else {
+    op = 'search'
+    const query = typeof raw.query === 'string' ? raw.query : ''
+    if (!query || query.length > REPO_MAX_QUERY_CHARS)
+      return fail(`repo_search needs query: 1-${REPO_MAX_QUERY_CHARS} characters`)
+    args = {
+      query,
+      ...(typeof raw.glob === 'string' && raw.glob ? { glob: raw.glob } : {}),
+      ...(raw.regex === true ? { regex: true } : {}),
+      ...(typeof raw.limit === 'number' && Number.isFinite(raw.limit)
+        ? { limit: Math.min(Math.max(1, Math.floor(raw.limit)), REPO_MAX_SEARCH_MATCHES) }
+        : {}),
+    }
+  }
+  const result = await repoToolCall(userId, link, op, args)
+  if (!result.ok) return fail(result.error ?? 'The linked project is unavailable.')
+  return ok(JSON.stringify(result.result ?? null))
 }
