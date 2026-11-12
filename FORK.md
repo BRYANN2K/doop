@@ -96,12 +96,12 @@ curl -sk https://bryann2k-infra-prod.tail35c61f.ts.net:8850/healthz
 curl -sk https://bryann2k-infra-prod.tail35c61f.ts.net:8850/mcp   # 405 = endpoint MCP présent (POST only)
 ```
 
-### Image privée GHCR : contournement utilisé
+### Image GHCR
 
-Le package `ghcr.io/bryann2k/doop` est **privé** par défaut ; sans PAT
-`read:packages` le cluster ne peut pas le tirer. Déploiement effectué en
-buildant l'image `linux/amd64` hors VPS et en l'important directement dans
-containerd (`imagePullPolicy: IfNotPresent` dans `deploy/k3s/doop.yaml`) :
+Le package `ghcr.io/bryann2k/doop` est **public** : le cluster le tire
+directement (`imagePullPolicy: Always`). Au premier déploiement, le package
+était encore privé (défaut GHCR) et l'image avait été importée à la main dans
+containerd — si cela devait se reproduire :
 
 ```bash
 docker build --platform linux/amd64 -t ghcr.io/bryann2k/doop:bryan-main .
@@ -109,11 +109,6 @@ docker save ghcr.io/bryann2k/doop:bryan-main | gzip > doop-image.tar.gz
 scp doop-image.tar.gz <vps>:/tmp/
 ssh <vps> 'sudo k3s ctr -n k8s.io images import /tmp/doop-image.tar.gz'
 ```
-
-Pour revenir à un pull GHCR normal : rendre le package public dans les
-réglages du package GitHub, ou créer un PAT `read:packages` et un
-`imagePullSecret` dans le namespace `doop`, puis repasser
-`imagePullPolicy: Always`.
 
 ## Live instance (2026-11-12)
 
