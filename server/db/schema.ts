@@ -813,6 +813,28 @@ export const automationApprovals = pgTable(
   (t) => [uniqueIndex('automation_approvals_event_idx').on(t.automationId, t.frameId, t.approvedAt)],
 )
 
+/** A canvas linked to a folder on the requester's own computer (the desktop
+ *  app holds `linkId → absolute path`; only the basename is stored here, the
+ *  path never leaves the device). One row per (canvas, user): re-linking
+ *  replaces it. Reads go through the device's poll — `device_id` is the
+ *  install that made the link, so a different poller can be flagged. */
+export const repoLinks = pgTable(
+  'repo_links',
+  {
+    /** the link id the desktop app minted at pick time */
+    id: text('id').primaryKey(),
+    canvasId: text('canvas_id').notNull(),
+    userId: text('user_id').notNull(),
+    /** folder basename, display only */
+    name: text('name').notNull(),
+    /** the install holding the grant; a different device polling warns */
+    deviceId: text('device_id').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }).notNull(),
+  },
+  (t) => [uniqueIndex('repo_links_canvas_user_idx').on(t.canvasId, t.userId)],
+)
+
 /** Local execution preference; Claude credentials never leave the desktop. */
 export const localAgentPreferences = pgTable('local_agent_preferences', {
   userId: text('user_id').primaryKey(),

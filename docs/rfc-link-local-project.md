@@ -127,13 +127,14 @@ Sandbox guarantees, enforced in Rust, not in the page:
 
 **New table `repo_links`** (drizzle migration, next number after 0052):
 
-| column                       | notes                                                 |
-| ---------------------------- | ----------------------------------------------------- |
-| `id`                         | the `linkId` minted by the client at pick time        |
-| `canvas_id`                  | the canvas the folder is linked to                    |
-| `user_id`                    | the link is per user — the agent uses the requester's |
-| `name`                       | folder basename only — the path never leaves the Mac  |
-| `created_at`, `last_used_at` | housekeeping                                          |
+| column                       | notes                                                      |
+| ---------------------------- | ---------------------------------------------------------- |
+| `id`                         | the `linkId` minted by the client at pick time             |
+| `canvas_id`                  | the canvas the folder is linked to                         |
+| `user_id`                    | the link is per user — the agent uses the requester's      |
+| `name`                       | folder basename only — the path never leaves the Mac       |
+| `device_id`                  | the install that holds the grant; a different poller warns |
+| `created_at`, `last_used_at` | housekeeping                                               |
 
 One row per `(canvas_id, user_id)` — re-linking replaces it.
 
@@ -319,11 +320,11 @@ chat exists), then 5–7.
   ~long-poll so typical overhead is low, but a run that reads 20 files feels
   it. Mitigation: `repo_read` batches paths; `repo_list` returns a whole tree
   slice per call.
-- **Two desktops, one user**: grants live per-device; the poll advertises
-  grant ids so only a device holding the grant claims a request. Still, two
-  linked folders on two machines with the same canvas is allowed to mean
-  _either_ answers — flag whether a link should record the device it was made
-  on (leaning: yes, store `deviceId` and warn on mismatch).
+- **Two desktops, one user** — decided: the link stores the `deviceId` of the
+  install that picked the folder, and the link status warns when the device
+  currently polling is a different one (or holds no grant for it). Grants
+  live per-device; the poll advertises grant ids so only a device holding
+  the grant claims a request.
 - **Chat vs comments/tasks overlap**: a third conversational surface next to
   comments and board cards can confuse. Proposal: chat answers questions and
   produces plans; durable work still lands as board cards; comments stay
@@ -331,8 +332,9 @@ chat exists), then 5–7.
 - **Plan fidelity**: the plan card's `screens[]` becomes cards verbatim —
   editing a screen list mid-confirm is covered by "Edit plan" turning the
   whole plan into a draft, not per-row editing.
-- **Who may press Go**: requester only, or any editor on the canvas? Leaning:
-  any editor (it queues cards as them), the plan card shows who launched.
+- **Who may press Go** — decided: any editor of the canvas. The launch
+  queues the cards as the pressing editor, and the plan card shows who
+  launched.
 - **External MCP clients**: `repo_*` tools stay resident-only for now — a
   Claude Code on the same Mac can read the disk itself. Expose later if
   wanted.
