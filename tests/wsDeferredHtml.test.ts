@@ -61,6 +61,7 @@ const init = (pageId: string | undefined, frames: Frame[]): ServerMessage => ({
   tasks: [],
   feedback: [],
   comments: [],
+  chat: [],
   decisions: [],
   proposals: [],
   selfColor: '#000',

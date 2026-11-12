@@ -15,6 +15,8 @@ import type {
   Canvas,
   CanvasMeta,
   CardScope,
+  ChatMessage,
+  ChatPlan,
   CommunityCategory,
   CommunityItem,
   ElementComment,
@@ -833,6 +835,15 @@ export const api = {
     req<ElementComment>(`/api/comments/${commentId}/anchor`, { method: 'PATCH', body: JSON.stringify(anchor) }),
   retryComment: (commentId: string) => req(`/api/comments/${commentId}/retry`, { method: 'POST' }),
   retryTaskFeedback: (feedbackId: string) => req(`/api/feedback/${feedbackId}/retry`, { method: 'POST' }),
+  /* the canvas chat: humans and the resident agent talk the next design over here */
+  listChat: (canvasId: string) => req<ChatMessage[]>(`/api/canvases/${canvasId}/chat`),
+  sendChat: (canvasId: string, input: { text: string; threadId?: string; forAgent?: string }) =>
+    req<ChatMessage>(`/api/canvases/${canvasId}/chat`, { method: 'POST', body: JSON.stringify(input) }),
+  editChatPlan: (messageId: string, plan: Pick<ChatPlan, 'summary' | 'screens' | 'openQuestions'>) =>
+    req<ChatMessage>(`/api/chat/${messageId}/plan`, { method: 'PATCH', body: JSON.stringify(plan) }),
+  launchChatPlan: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/launch`, { method: 'POST' }),
+  cancelChatPlan: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/cancel`, { method: 'POST' }),
+  retryChatAsk: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/retry`, { method: 'POST' }),
   /* automations: scheduled pulls and agent tasks */
   listAutomations: () => req<Automation[]>('/api/automations'),
   getAutomation: (id: string) => req<Automation>(`/api/automations/${id}`),

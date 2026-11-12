@@ -13,7 +13,13 @@ import {
   tokensTailwind,
   type TokenResult,
 } from '../shared/designTokens.ts'
-import { ModelAuthError, ModelConfigurationError, ModelUnavailableError, pickModel } from './agentModel.ts'
+import {
+  ModelAuthError,
+  ModelConfigurationError,
+  ModelUnavailableError,
+  pickModel,
+  type AgentModel,
+} from './agentModel.ts'
 import { RESIDENT_TASK_LIMIT } from './allowance.ts'
 import * as actions from './actions.ts'
 import { inspectFrame, renderFrame } from './screenshot.ts'
@@ -47,7 +53,8 @@ import {
   inspirationSearchEnabled,
   searchInspiration,
 } from './inspiration.ts'
-import type { Actor, AgentTask, Canvas, ElementComment, Frame } from '../shared/types.ts'
+import type { Actor, AgentTask, Canvas, ChatMessage, ChatPlan, ElementComment, Frame } from '../shared/types.ts'
+import { CHAT_HISTORY_LINES, chatThreadId, cleanChatPlan } from '../shared/chat.ts'
 import { canvasPages, framePageId, MAX_PAGE_NAME, pageFrames, samePages } from '../shared/pages.ts'
 import { addPage, pageList, parsePageList, savePages, updateFrameMeta } from './pageTools.ts'
 import { isCanvasComment, isFrameComment } from '../shared/comments.ts'
@@ -245,6 +252,16 @@ interface RunState {
    *  reordered or deleted, a frame renamed or moved): work a card can ask
    *  for on its own, delivered without a design change */
   arrangeWrites: number
+  /* ---- chat runs only ---- */
+  /** the asks this chat run claimed, oldest first */
+  chatAsks?: ChatMessage[]
+  /** thread roots the agent already posted into (a plan, a question) — the
+   *  settle does not double-post the closing words there */
+  chatPostedThreads?: Set<string>
+  /** propose_plan or ask_in_chat landed: the chat turn is done */
+  chatDone?: boolean
+  /** a plan card already went out this run — a second call is refused */
+  planProposed?: boolean
 }
 
 export interface FramePlacement {
@@ -428,6 +445,10 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
      account was disconnected, or before metering tightened — and it must
      fail visibly with a fix, not crash on a key that was never meant to pay. */
   const actor = actions.resolveActor({ name: role.name, kind: 'agent' })
+  /* a chat ask takes the plan-only loop instead: read tools, propose_plan
+     and ask_in_chat — nothing that touches the canvas before a human
+     presses Go design */
+  if (work.chat) return runChat(canvasId, role, payer, model, actor, stalled, key)
   if (!model.userId && RESIDENT_TASK_LIMIT <= 0) {
     const reason =
       'The Doop Agent needs a connected account — connect your ChatGPT subscription or an OpenAI, OpenRouter, Gemini, DeepSeek, Kimi or Claude API key in Settings, then retry.'
@@ -1021,6 +1042,467 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
     clearInterval(heartbeat)
     /* clear the status — this completes the agent's task in the panel */
     actions.setAgentStatus(canvasId, actor, '')
+  }
+  return 'ran'
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat runs: the same resident answering asks in the canvas chat,     */
+/* under a plan-only tool set. Read tools, the repo_* tools when the   */
+/* asker linked a project, propose_plan and ask_in_chat — no write     */
+/* tool exists in this loop, so the canvas cannot change before an     */
+/* editor presses Go design.                                           */
+/* ------------------------------------------------------------------ */
+
+const CHAT_MAX_TURNS = 14
+
+/** The resident tools a chat run may call: reading the canvas and its
+ *  context, never writing to it. Keep in sync with the run's refusal — a
+ *  write tool the model hallucinates is refused in execChatTool too. */
+export const CHAT_READ_TOOL_NAMES = new Set([
+  'set_status',
+  'inspect_frame',
+  'get_frame_html',
+  'screenshot_frame',
+  'get_tokens',
+  'get_prototype',
+  'get_reference',
+  'view_website',
+  'search_inspiration',
+])
+
+const CHAT_SYSTEM = `You are a resident agent of the Doop canvas — a multiplayer design tool where humans and AI agents design HTML frames together — answering in the canvas CHAT, not editing. Humans talk the next design over with you here; the canvas only changes after an editor presses "Go design" on a plan card, which queues one board card per screen.
+
+Rules:
+- You cannot change the canvas from chat: only read tools exist here. Look before you speak — inspect_frame, get_frame_html, screenshot_frame, get_tokens, get_prototype, get_reference, view_website, search_inspiration, and the repo_* tools when the asker linked a project.
+- Answer plain questions in your final message — it is posted to the thread. Keep it short: a chat bubble, not a document.
+- When the ask is design work — new screens, a redesign, a flow — investigate first, then end with ONE propose_plan call. The plan must stand on its own: what it is for, the screens to create with real sizes and what each shows, and the canvas or project pieces to reuse (token names, component names, file paths). Anything genuinely undecided goes into open_questions — the humans answer in chat before pressing Go design.
+- When you cannot produce a plan or an answer without a decision only a human can make, ask_in_chat one focused question and stop.
+- Never describe design work as done — nothing is designed until an editor presses Go design.`
+
+/** The two write-shaped tools a chat run gets: they write to the CHAT, never
+ *  the canvas. */
+const CHAT_PLAN_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'propose_plan',
+    description:
+      'Post a design plan card into the chat thread and end your turn. It is a proposal only — a human presses "Go design" to turn each screen into a board card. Call it once, when the ask is design work and you have already looked at what the canvas and the linked project offer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What the design is for, in one or two sentences' },
+        screens: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'The screen’s name, e.g. "Settings — Profile"' },
+              width: { type: 'number', description: 'Frame width in design px' },
+              height: { type: 'number', description: 'Frame height in design px' },
+              outline: { type: 'string', description: 'What the screen shows — sections, content, states' },
+              reuse: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Canvas components/tokens or project file paths this screen builds from',
+              },
+            },
+            required: ['name', 'width', 'height', 'outline'],
+          },
+          description: 'The screens to create — one board card each on Go design',
+        },
+        open_questions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Decisions the humans still owe, asked and answered in chat',
+        },
+        message_id: {
+          type: 'string',
+          description: 'The pending ask this plan answers — needed only when the run carries several',
+        },
+      },
+      required: ['summary', 'screens'],
+    },
+  },
+  {
+    name: 'ask_in_chat',
+    description:
+      'Ask the humans one focused question in the chat thread and end your turn. Use only when you cannot answer or plan without a decision only they can make.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string' },
+        message_id: { type: 'string', description: 'The pending ask this answers, when several are open' },
+      },
+      required: ['question'],
+    },
+  },
+]
+
+/** The tool list a chat run sees: read tools + the plan tools + repo_* when
+ *  the asker has a project linked. Exported so tests can pin the contract. */
+export function chatTools(repoLinked: boolean): Anthropic.Tool[] {
+  return [
+    ...TOOLS.filter((tool) => CHAT_READ_TOOL_NAMES.has(tool.name)),
+    ...CHAT_PLAN_TOOLS,
+    ...(repoLinked ? REPO_TOOLS : []),
+  ]
+}
+
+/** The ask a tool call answers: the named one when the model passed a valid
+ *  message_id, else the oldest claimed. */
+function chatAskFor(runState: RunState, id: unknown): ChatMessage | undefined {
+  const asks = runState.chatAsks ?? []
+  return (typeof id === 'string' ? asks.find((m) => m.id === id) : undefined) ?? asks[0]
+}
+
+function postAgentChat(
+  canvasId: string,
+  actor: Actor,
+  ref: ChatMessage | undefined,
+  text: string,
+  plan?: ChatPlan,
+): ChatMessage | undefined {
+  return actions.postChatMessage(canvasId, {
+    from: actor.name,
+    agent: true,
+    text,
+    ...(ref ? { threadId: ref.id } : {}),
+    ...(plan ? { plan } : {}),
+  })
+}
+
+/** The plan-only tool dispatch: read tools go to the shared executor, the
+ *  two plan tools write into chat, and every write tool — advertised or
+ *  hallucinated — is refused. */
+export async function execChatTool(
+  block: Anthropic.ToolUseBlockParam,
+  canvasId: string,
+  actor: ReturnType<typeof actions.resolveActor>,
+  runState: RunState,
+): Promise<Anthropic.ToolResultBlockParam> {
+  const input = block.input as Record<string, unknown>
+  const fail = (msg: string): Anthropic.ToolResultBlockParam => ({
+    type: 'tool_result',
+    tool_use_id: block.id,
+    content: msg,
+    is_error: true,
+  })
+  const ok = (content: string): Anthropic.ToolResultBlockParam => ({
+    type: 'tool_result',
+    tool_use_id: block.id,
+    content,
+  })
+  switch (block.name) {
+    case 'propose_plan': {
+      if (runState.planProposed) return fail('a plan was already posted in this run — one turn, one plan')
+      const clean = cleanChatPlan(block.input)
+      if (!clean) {
+        return fail('propose_plan needs a summary and at least one screen with name, width, height and outline')
+      }
+      const message = postAgentChat(canvasId, actor, chatAskFor(runState, input.message_id), clean.summary, {
+        ...clean,
+        status: 'proposed',
+      })
+      if (!message) return fail('could not post to the chat')
+      const root = chatThreadId(message)
+      /* the new plan supersedes every still-open plan in the thread */
+      actions.reviseChatPlans(canvasId, root, message.id)
+      runState.planProposed = true
+      runState.chatDone = true
+      ;(runState.chatPostedThreads ??= new Set()).add(root)
+      return ok('plan posted to the chat — the humans review it now; your turn is done')
+    }
+    case 'ask_in_chat': {
+      const question = String(input.question ?? '').trim()
+      if (!question) return fail('question required')
+      const message = postAgentChat(canvasId, actor, chatAskFor(runState, input.message_id), question)
+      if (!message) return fail('could not post to the chat')
+      runState.chatDone = true
+      ;(runState.chatPostedThreads ??= new Set()).add(chatThreadId(message))
+      return ok('question posted — a human answers in chat; your turn is done')
+    }
+    default:
+      if (runState.blockedWebsiteAccess) return fail(runState.blockedWebsiteAccess)
+      /* repo_* stays reachable when the run carries a linked project —
+         execTool itself refuses the call without a requester link */
+      if (!CHAT_READ_TOOL_NAMES.has(block.name) && !REPO_TOOLS.some((tool) => tool.name === block.name)) {
+        return fail(
+          `${block.name} is not available while planning — the canvas does not change until an editor presses Go design`,
+        )
+      }
+      return execTool(block, canvasId, actor, runState)
+  }
+}
+
+/** What a chat run reads first: the threads its asks live in, then the asks
+ *  themselves, then what the canvas already holds. */
+function chatKickoff(asks: ChatMessage[], frameList: string): string {
+  const sections: string[] = []
+  const threads = new Map<string, ChatMessage[]>()
+  for (const m of asks) {
+    const root = chatThreadId(m)
+    if (!threads.has(root)) threads.set(root, actions.chatThread(root).slice(-CHAT_HISTORY_LINES))
+  }
+  for (const [root, msgs] of threads) {
+    sections.push(
+      (threads.size > 1 ? `## Thread ${root}` : '## Chat so far') +
+        '\n' +
+        msgs
+          .map(
+            (m) =>
+              `- ${m.from}${m.agent ? ' (agent)' : ''}: ${m.plan ? `[design plan — ${m.plan.status}] ${m.plan.summary}` : m.text}`,
+          )
+          .join('\n'),
+    )
+  }
+  sections.push(
+    'Pending asks — answer each one, naming its message_id when several are open:\n' +
+      asks.map((m) => `- ${m.id} — ${m.from}: "${m.text}"`).join('\n'),
+  )
+  if (frameList) sections.push(`Frames on the canvas right now:\n${frameList}`)
+  return sections.join('\n\n')
+}
+
+/**
+ * The plan-only half of the resident: answer chat asks with a reply, a
+ * question, or a plan card. Claims are the payer's open asks routed to this
+ * agent — nothing else, so a chat run can never end up holding a board card.
+ */
+async function runChat(
+  canvasId: string,
+  role: AgentRole,
+  payer: string,
+  model: AgentModel,
+  actor: Actor,
+  stalled: Set<string>,
+  key: string,
+): Promise<RunOutcome> {
+  const asks = actions.takeChatAsksFor(canvasId, role.name, payer, '')
+  /* With no free tier the server's key never pays — the asks still fail
+     visibly with the fix, like claimed cards do. */
+  if (!model.userId && RESIDENT_TASK_LIMIT <= 0) {
+    const reason =
+      'The Doop Agent needs a connected account — connect your ChatGPT subscription or an OpenAI, OpenRouter, Gemini, DeepSeek, Kimi or Claude API key in Settings, then retry.'
+    for (const m of asks) actions.failChatAsk(m.id, reason)
+    stalled.add(key)
+    return 'no-model'
+  }
+  if (asks.length === 0) {
+    stalled.add(key)
+    return 'no-model'
+  }
+  const canvas = store.getCanvas(canvasId)
+  const repoUserId = payer || canvas?.ownerId
+  const repoLink = repoUserId ? await linkFor(repoUserId, canvasId).catch(() => undefined) : undefined
+  const runState: RunState = {
+    mutatedFrames: new Set(),
+    sourceFrames: new Set(),
+    verificationFrames: new Set(),
+    verifiedFrames: new Set(),
+    rewriteDrafts: new Map(),
+    vision: model.vision !== false,
+    ...(model.userId ? { payerId: model.userId } : {}),
+    ...(repoLink && repoUserId ? { repoUserId } : {}),
+    imagesGenerated: 0,
+    repliedThreads: new Set(),
+    awaitingThreads: new Set(),
+    tokenWrites: 0,
+    arrangeWrites: 0,
+    chatAsks: asks,
+    chatPostedThreads: new Set(),
+  }
+  const heartbeat = setInterval(() => actions.heartbeatAgent(canvasId, actor), 15_000)
+  const abort = new AbortController()
+  const messages: Anthropic.MessageParam[] = []
+  let finished = false
+  let crashed = false
+  let refused = false
+  let turnsUsed = 0
+  console.log(
+    `[resident] chat run start canvas=${canvasId} agent=${role.name} model=${model.label}${model.userId ? ` on=${model.userId}` : ''} asks=${asks.length}`,
+  )
+  try {
+    actions.setAgentStatus(canvasId, actor, 'Reading the chat…')
+    const visibleFrames = (canvas?.frames ?? []).filter((f) => !f.demo)
+    const frameList = describeFrameList(visibleFrames, await imagesForFrames(visibleFrames.map((f) => f.id)), canvas)
+    const kickoff = chatKickoff(asks, frameList)
+    messages.push({ role: 'user', content: kickoff })
+
+    /* the same context a card run plans under: the canvas's rules, its
+       components and tokens to name for reuse, the linked project */
+    const guidelineDocs = store.getGuidelines(canvasId)
+    const guidelinesBlock = guidelineDocs.length
+      ? [
+          {
+            text:
+              `# Canvas design guidelines\nPlans on this canvas must respect these docs:\n\n` +
+              guidelineDocs.map((d) => `## ${d.name}\n\n${d.markdown}`).join('\n\n'),
+            cache: true,
+          },
+        ]
+      : []
+    const tokens = store.getTokens(canvasId)
+    const tokensBlock = tokens.length
+      ? [{ text: `# Design tokens\n${tokensBrief(tokens, store.getTokenThemes(canvasId))}` }]
+      : []
+    const componentDocs = canvas ? store.getComponents(canvasId) : []
+    const componentsBlock =
+      componentDocs.length && canvas
+        ? [
+            {
+              text:
+                `# Components on this canvas\nName these in a plan's reuse list rather than redesigning them:\n\n` +
+                componentDocs
+                  .map((def) => {
+                    const entry = catalogEntry(canvas, def)
+                    return `- ${entry.signature}${def.description ? ` — ${def.description}` : ''}`
+                  })
+                  .join('\n'),
+            },
+          ]
+        : []
+    const repoBlock = repoLink
+      ? [
+          {
+            text:
+              `# Linked local project\nThe asker linked the folder "${repoLink.name}" on their computer to ` +
+              `this canvas — read it through the repo_* tools, never write or run anything in it. Before ` +
+              `proposing a plan, investigate it: repo_list the tree, then repo_read what a plan needs — ` +
+              `design tokens, theme or tailwind config, existing components, copy and locale files — and ` +
+              `name the files the plan should reuse. Reads only work while the asker's desktop app is open; ` +
+              `if a repo_* call says it is offline, say so plainly and plan without it.`,
+          },
+        ]
+      : []
+    const system = [
+      { text: `${CHAT_SYSTEM}\n\nYour role on this canvas is ${role.name}. ${role.brief}`, cache: true },
+      ...guidelinesBlock,
+      ...tokensBlock,
+      ...componentsBlock,
+      ...repoBlock,
+    ]
+    const runTools = chatTools(!!repoLink)
+
+    if (model.runHarness) {
+      const result = await model.runHarness({
+        canvasId,
+        prompt: kickoff,
+        system: system.map((block) => block.text).join('\n\n'),
+        tools: runTools,
+        maxTurns: CHAT_MAX_TURNS,
+        signal: abort.signal,
+        execute: (block) => execChatTool(block, canvasId, actor, runState),
+      })
+      finished = result.success
+      crashed = !result.success
+      if (result.text) messages.push({ role: 'assistant', content: [{ type: 'text', text: result.text }] })
+    } else {
+      for (let turn = 0; turn < CHAT_MAX_TURNS; turn++) {
+        if (runState.chatDone) {
+          finished = true
+          break
+        }
+        const res = await retryModelTurn(
+          () =>
+            model.run({
+              maxTokens: 8000,
+              system,
+              tools: runTools,
+              messages,
+              signal: abort.signal,
+            }),
+          {
+            isCanceled: () => false,
+            onRetry: (attempt) => {
+              console.warn(`[resident] chat model interrupted canvas=${canvasId} turn=${turn + 1} retry=${attempt}`)
+              actions.setAgentStatus(canvasId, actor, `Model connection interrupted — reconnecting (${attempt}/2)…`)
+            },
+          },
+        )
+        if (res.stop_reason === 'refusal') {
+          actions.setAgentStatus(canvasId, actor, 'Could not take that ask')
+          refused = true
+          break
+        }
+        messages.push({ role: 'assistant', content: res.content })
+        turnsUsed = turn + 1
+        const toolBlocks = res.content.filter(
+          (block): block is Anthropic.ToolUseBlockParam => block.type === 'tool_use',
+        )
+        console.log(
+          `[resident] chat turn canvas=${canvasId} turn=${turnsUsed} stop=${res.stop_reason} tools=${toolBlocks.map((block) => block.name).join(',') || 'none'}`,
+        )
+        if (toolBlocks.length > 0) {
+          const results = await executeGuardedBatch<Anthropic.ToolUseBlockParam, Anthropic.ToolResultBlockParam>(
+            toolBlocks,
+            {
+              blocked: (block) =>
+                runState.chatDone && block.name !== 'set_status'
+                  ? 'your turn is done — no more tool calls this run'
+                  : (runState.blockedWebsiteAccess ?? undefined),
+              skipped: (block, reason) => ({
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: `Skipped ${block.name}. ${reason}`,
+                is_error: true,
+              }),
+              execute: (block) => execChatTool(block, canvasId, actor, runState),
+            },
+          )
+          messages.push({ role: 'user', content: results })
+          continue
+        }
+        finished = true
+        break
+      }
+    }
+  } catch (err) {
+    crashed = true
+    console.error('[resident] chat run errored', err)
+    actions.setAgentStatus(canvasId, actor, 'Hit a snag — waiting for a retry')
+  } finally {
+    clearInterval(heartbeat)
+    actions.setAgentStatus(canvasId, actor, '')
+  }
+
+  console.log(
+    `[resident] chat run end canvas=${canvasId} agent=${role.name} turns=${turnsUsed} finished=${finished} refused=${refused} crashed=${crashed} plan=${!!runState.planProposed}`,
+  )
+  const last = messages[messages.length - 1]
+  const summary =
+    last?.role === 'assistant' && Array.isArray(last.content)
+      ? last.content
+          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+          .map((b) => b.text)
+          .join(' ')
+          .trim()
+      : ''
+  const posted = runState.chatPostedThreads ?? new Set()
+  if (finished) {
+    /* threads the agent already spoke in (a plan, a question) get no second
+       message; the rest get the closing words */
+    for (const m of asks) {
+      const root = chatThreadId(m)
+      if (summary && !posted.has(root)) {
+        postAgentChat(canvasId, actor, m, summary)
+        posted.add(root)
+      }
+      actions.answerChatAsk(m.id)
+    }
+  } else {
+    const reason = refused
+      ? `${role.name} could not take that ask. Retry when you are ready.`
+      : crashed
+        ? `${role.name} hit a snag before finishing. Retry when you are ready.`
+        : `${role.name} ran out of turns before finishing. Retry when you are ready.`
+    for (const m of asks) {
+      const root = chatThreadId(m)
+      if (!posted.has(root)) {
+        postAgentChat(canvasId, actor, m, reason)
+        posted.add(root)
+      }
+      actions.failChatAsk(m.id, reason)
+    }
   }
   return 'ran'
 }

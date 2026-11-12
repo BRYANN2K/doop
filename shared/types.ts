@@ -543,6 +543,65 @@ export interface ActivityItem {
   at: number
 }
 
+/* ---- canvas chat ---- */
+
+/** One screen a chat plan proposes: the card Go design queues is built from
+ *  this verbatim, so the fields stay close to what a card needs. */
+export interface ChatPlanScreen {
+  name: string
+  width: number
+  height: number
+  /** what goes on the screen — becomes the card's brief */
+  outline: string
+  /** repo paths, token names or components the design should reuse */
+  reuse?: string[]
+}
+
+/** A design plan the agent put into chat, waiting on a human's decision.
+ *  proposed → approved (a human edited it) → launched; or revised (a newer
+ *  plan superseded it) / canceled. */
+export interface ChatPlan {
+  summary: string
+  screens: ChatPlanScreen[]
+  openQuestions?: string[]
+  status: 'proposed' | 'approved' | 'launched' | 'revised' | 'canceled'
+  /** the board cards Go design queued, one per screen */
+  taskIds?: string[]
+  /** the editor who pressed Go design — the card shows who launched it */
+  launchedBy?: string
+  launchedByUserId?: string
+  launchedAt?: number
+}
+
+/** One line of canvas chat: a human's message, or the resident agent's
+ *  answer — a plain reply, a question back, or a plan card. A human message
+ *  that @mentions the agent is work for it (forAgent), claimed and answered
+ *  like an @mention comment. */
+export interface ChatMessage {
+  id: string
+  canvasId: string
+  /** the root message of the thread; absent on the root itself */
+  threadId?: string
+  from: string
+  /** account id of the human who sent it — absent on the agent's messages,
+   *  and decides which model credential answers an ask */
+  fromUserId?: string
+  /** written by the resident agent */
+  agent?: boolean
+  text: string
+  /** an agent-authored design plan this message carries */
+  plan?: ChatPlan
+  at: number
+  /* agent routing, same lifecycle as an @mention comment */
+  forAgent?: boolean
+  targetAgent?: string
+  claimedBy?: string
+  claimedAt?: number
+  answeredAt?: number
+  failedAt?: number
+  failureReason?: string
+}
+
 /** A client's camera: world→screen transform plus the stage size it fills. */
 export interface PeerViewport {
   pageId?: string
@@ -589,6 +648,7 @@ export type ServerMessage =
       tasks: AgentTask[]
       feedback: TaskFeedback[]
       comments: ElementComment[]
+      chat: ChatMessage[]
       decisions: DesignDecision[]
       proposals: MemoryProposal[]
       selfColor: string
@@ -608,6 +668,7 @@ export type ServerMessage =
   | { type: 'task'; task: AgentTask }
   | { type: 'feedback'; feedback: TaskFeedback }
   | { type: 'comment'; comment: ElementComment }
+  | { type: 'chat'; message: ChatMessage }
   | {
       type: 'frame:drag'
       clientId: string

@@ -186,6 +186,7 @@ function handle(msg: ServerMessage) {
       s.setTasks(msg.tasks)
       s.setFeedback(msg.feedback)
       s.setComments(msg.comments)
+      s.setChat(msg.chat)
       s.setDecisions(msg.decisions)
       s.setProposals(msg.proposals)
       break
@@ -221,6 +222,9 @@ function handle(msg: ServerMessage) {
       break
     case 'comment':
       s.upsertComment(msg.comment)
+      break
+    case 'chat':
+      s.upsertChat(msg.message)
       break
     case 'frame:drag':
       s.patchFrameLocal(msg.frameId, {

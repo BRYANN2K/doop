@@ -7,6 +7,7 @@ import type {
   AgentTask,
   Canvas,
   CanvasGuide,
+  ChatMessage,
   DesignDecision,
   ElementComment,
   Frame,
@@ -55,6 +56,8 @@ interface State {
   feedback: TaskFeedback[]
   /** element-anchored comments (newest first) */
   comments: ElementComment[]
+  /** the canvas chat — humans and the resident agent (newest first) */
+  chat: ChatMessage[]
   /** design decisions captured into Memory (newest first) */
   decisions: DesignDecision[]
   /** distiller rule proposals (newest first) */
@@ -201,6 +204,8 @@ interface State {
   upsertFeedback(fb: TaskFeedback): void
   setComments(comments: ElementComment[]): void
   upsertComment(c: ElementComment): void
+  setChat(messages: ChatMessage[]): void
+  upsertChat(m: ChatMessage): void
   upsertFrame(f: Frame): void
   patchFrameLocal(frameId: string, patch: Partial<Frame>): void
   /** the HTML of frames that arrived deferred; a frame already holding its own is left alone */
@@ -315,6 +320,7 @@ export const useStore = create<State>((set, get) => ({
   tasks: [],
   feedback: [],
   comments: [],
+  chat: [],
   decisions: [],
   proposals: [],
   panelTab: 'tasks',
@@ -493,6 +499,14 @@ export const useStore = create<State>((set, get) => ({
         ? s.comments.map((x) => (x.id === c.id ? c : x))
         : [c, ...s.comments].slice(0, 100)
       return { comments }
+    }),
+  setChat: (chat) => set({ chat }),
+  upsertChat: (m) =>
+    set((s) => {
+      const chat = s.chat.some((x) => x.id === m.id)
+        ? s.chat.map((x) => (x.id === m.id ? m : x))
+        : [m, ...s.chat].slice(0, 200)
+      return { chat }
     }),
   upsertFeedback: (fb) =>
     set((s) => {

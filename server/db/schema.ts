@@ -12,7 +12,7 @@ import {
   customType,
 } from 'drizzle-orm/pg-core'
 import { open, seal } from '../secretBox.ts'
-import type { CanvasGuide, CanvasPageInfo, FrameApproval } from '../../shared/types.ts'
+import type { CanvasGuide, CanvasPageInfo, ChatPlan, FrameApproval } from '../../shared/types.ts'
 import type { AutomationRunState, AutomationTrigger, Schedule, Step } from '../../shared/automations.ts'
 import type {
   ComponentCode,
@@ -422,6 +422,33 @@ export const comments = pgTable(
     parentId: text('parent_id'),
   },
   (t) => [index('comments_canvas_idx').on(t.canvasId)],
+)
+
+/** Canvas chat: human messages and the resident agent's answers, including
+ *  plan cards. A human message @mentioning the agent is a claimable ask
+ *  (for_agent + the comment lifecycle fields); the plan jsonb carries a
+ *  card's status through proposed → launched/canceled. */
+export const chatMessages = pgTable(
+  'chat_messages',
+  {
+    id: text('id').primaryKey(),
+    canvasId: text('canvas_id').notNull(),
+    threadId: text('thread_id'),
+    fromName: text('from_name').notNull(),
+    fromUserId: text('from_user_id'),
+    agent: boolean('agent').notNull().default(false),
+    text: text('text').notNull(),
+    plan: jsonb('plan').$type<ChatPlan>(),
+    at: bigint('at', { mode: 'number' }).notNull(),
+    forAgent: boolean('for_agent').notNull().default(false),
+    targetAgent: text('target_agent'),
+    claimedBy: text('claimed_by'),
+    claimedAt: bigint('claimed_at', { mode: 'number' }),
+    answeredAt: bigint('answered_at', { mode: 'number' }),
+    failedAt: bigint('failed_at', { mode: 'number' }),
+    failureReason: text('failure_reason'),
+  },
+  (t) => [index('chat_messages_canvas_idx').on(t.canvasId)],
 )
 
 /** Uploaded image assets: metadata only — bytes live in object storage (or

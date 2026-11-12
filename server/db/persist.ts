@@ -19,6 +19,7 @@ import type {
   AgentTask,
   CardScope,
   Canvas,
+  ChatMessage,
   DesignDecision,
   ElementComment,
   Frame,
@@ -946,6 +947,43 @@ async function writeComment(c: ElementComment): Promise<void> {
     })
 }
 
+export function saveChatMessage(m: ChatMessage) {
+  const row = {
+    id: m.id,
+    canvasId: m.canvasId,
+    threadId: m.threadId ?? null,
+    fromName: m.from,
+    fromUserId: m.fromUserId ?? null,
+    agent: m.agent ?? false,
+    text: m.text,
+    plan: m.plan ?? null,
+    at: m.at,
+    forAgent: m.forAgent ?? false,
+    targetAgent: m.targetAgent ?? null,
+    claimedBy: m.claimedBy ?? null,
+    claimedAt: m.claimedAt ?? null,
+    answeredAt: m.answeredAt ?? null,
+    failedAt: m.failedAt ?? null,
+    failureReason: m.failureReason ?? null,
+  }
+  swallow(
+    db
+      .insert(t.chatMessages)
+      .values(row)
+      .onConflictDoUpdate({
+        target: t.chatMessages.id,
+        set: {
+          plan: row.plan,
+          claimedBy: row.claimedBy,
+          claimedAt: row.claimedAt,
+          answeredAt: row.answeredAt,
+          failedAt: row.failedAt,
+          failureReason: row.failureReason,
+        },
+      }),
+  )
+}
+
 export function saveActivity(canvasId: string, item: ActivityItem) {
   swallow(
     db.insert(t.activity).values({
@@ -986,6 +1024,7 @@ export interface Hydrated {
   tasks: Map<string, AgentTask[]> // canvasId -> newest first
   feedback: Map<string, TaskFeedback[]>
   comments: Map<string, ElementComment[]>
+  chat: Map<string, ChatMessage[]>
   /** comment id -> the positional CSS path an element comment was anchored
    *  by before element ids; `backfillElementIds` turns each into a stamp */
   legacyCommentSelectors: Map<string, string>
@@ -1003,6 +1042,7 @@ export async function hydrate(): Promise<Hydrated> {
     taskRows,
     feedbackRows,
     commentRows,
+    chatRows,
     activityRows,
     guidelineRows,
     componentRows,
@@ -1019,6 +1059,7 @@ export async function hydrate(): Promise<Hydrated> {
     db.select().from(t.tasks).orderBy(desc(t.tasks.startedAt)),
     db.select().from(t.feedback).orderBy(desc(t.feedback.at)),
     db.select().from(t.comments).orderBy(desc(t.comments.at)),
+    db.select().from(t.chatMessages).orderBy(desc(t.chatMessages.at)),
     db.select().from(t.activity).orderBy(desc(t.activity.at)),
     db.select().from(t.guidelines).orderBy(t.guidelines.name),
     db.select().from(t.components).orderBy(t.components.name),
@@ -1233,6 +1274,37 @@ export async function hydrate(): Promise<Hydrated> {
     comments.set(row.canvasId, list)
   }
 
+  const chat = new Map<string, ChatMessage[]>()
+  for (const row of chatRows) {
+    const list = chat.get(row.canvasId) ?? []
+    if (list.length >= LOG_CAP) continue
+    const interrupted = row.claimedBy != null && row.answeredAt == null && row.failedAt == null
+    const failedAt = row.failedAt ?? (interrupted ? now : undefined)
+    const failureReason = row.failureReason ?? (interrupted ? interruptedReason : undefined)
+    if (interrupted) {
+      swallow(db.update(t.chatMessages).set({ failedAt, failureReason }).where(eq(t.chatMessages.id, row.id)))
+    }
+    list.push({
+      id: row.id,
+      canvasId: row.canvasId,
+      ...(row.threadId != null ? { threadId: row.threadId } : {}),
+      from: row.fromName,
+      ...(row.fromUserId != null ? { fromUserId: row.fromUserId } : {}),
+      ...(row.agent ? { agent: true } : {}),
+      text: row.text,
+      ...(row.plan != null ? { plan: row.plan } : {}),
+      at: row.at,
+      ...(row.forAgent ? { forAgent: true } : {}),
+      ...(row.targetAgent != null ? { targetAgent: row.targetAgent } : {}),
+      ...(row.claimedBy != null ? { claimedBy: row.claimedBy } : {}),
+      ...(row.claimedAt != null ? { claimedAt: row.claimedAt } : {}),
+      ...(row.answeredAt != null ? { answeredAt: row.answeredAt } : {}),
+      ...(failedAt !== undefined ? { failedAt } : {}),
+      ...(failureReason !== undefined ? { failureReason } : {}),
+    })
+    chat.set(row.canvasId, list)
+  }
+
   const activity = new Map<string, ActivityItem[]>()
   for (const row of activityRows) {
     const list = activity.get(row.canvasId) ?? []
@@ -1286,7 +1358,7 @@ export async function hydrate(): Promise<Hydrated> {
     proposals.set(row.canvasId, list)
   }
 
-  return { canvases, tasks, feedback, comments, legacyCommentSelectors, activity, decisions, proposals }
+  return { canvases, tasks, feedback, comments, chat, legacyCommentSelectors, activity, decisions, proposals }
 }
 
 /** One-time import of the pre-DB data/store.json so existing canvases survive. */

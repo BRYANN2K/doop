@@ -121,13 +121,14 @@ import { setStoredDefault } from './agentDefaults.ts'
 import { isRunnerProvider } from '../shared/agentRunner.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
+import { cleanChatPlan, isOpenPlan } from '../shared/chat.ts'
 import { activeAgentTasks } from '../shared/agentActivity.ts'
 import { colorFor } from '../shared/types.ts'
 import { isPeerViewport } from '../shared/viewport.ts'
 import { exportScaleSuffix, fitExportScale, parseExportScale } from '../shared/exportScale.ts'
 import { emailShare } from './canvasShares.ts'
 import * as userEvents from './userEvents.ts'
-import type { Canvas, ClientMessage, Presence, ServerMessage } from '../shared/types.ts'
+import type { Canvas, ChatMessage, ClientMessage, Presence, ServerMessage } from '../shared/types.ts'
 
 const PORT = env.PORT
 
@@ -2699,6 +2700,150 @@ app.post('/api/comments/:id/replies', async (req, res) => {
   res.json(reply)
 })
 
+/* ------------------------------------------------------------------ */
+/* Canvas chat: the thread where a human talks the next design over    */
+/* with the resident agent before anything touches the canvas. A       */
+/* design ask comes back as a plan card; only an editor's Go design    */
+/* turns it into board cards, one per screen.                          */
+/* ------------------------------------------------------------------ */
+
+app.get('/api/canvases/:id/chat', (req, res) => {
+  if (!requireCanvas(req, res, req.params.id, 'view')) return
+  res.json(actions.getChat(req.params.id))
+})
+
+app.post('/api/canvases/:id/chat', async (req, res) => {
+  if (!requireCanvas(req, res, req.params.id, 'comment')) return
+  const text = String(req.body?.text ?? '')
+  if (!text.trim()) return res.status(400).json({ error: 'empty text' })
+  const threadId = typeof req.body?.threadId === 'string' ? req.body.threadId : undefined
+  if (threadId) {
+    const root = actions.findChatMessage(threadId)
+    if (!root || root.canvasId !== req.params.id) return res.status(404).json({ error: 'thread not found' })
+  }
+  if (refuseAgentMention(req, res, req.params.id, text)) return
+  /* an @mention asks the resident agent for work — metered like a comment's */
+  let gate: Awaited<ReturnType<typeof allowance.consumeResidentTask>> | undefined
+  if (mentionedRole(text)) {
+    gate = await allowance.consumeResidentTask(req.user!.id)
+    if (!gate.ok) {
+      return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
+    }
+  }
+  const message = actions.postChatMessage(req.params.id, {
+    from: req.user!.name,
+    fromUserId: req.user!.id,
+    text,
+    threadId,
+  })
+  if (!message) {
+    if (gate) {
+      await allowance.refundResidentTask(gate, req.user!.id).catch((err) => {
+        console.error(`[chat] could not refund a resident task for ${req.user!.id}:`, err)
+      })
+    }
+    return res.status(409).json({ error: 'canvas gone meanwhile' })
+  }
+  res.json(message)
+})
+
+/** The plan card a chat route acts on, or the reply sent. */
+function requireChatPlan(req: express.Request, res: express.Response): ChatMessage | undefined {
+  const message = actions.findChatMessage(String(req.params.messageId))
+  if (!message?.plan) {
+    res.status(404).json({ error: 'plan not found' })
+    return undefined
+  }
+  return message
+}
+
+/* Bryan's call: ANY editor of the canvas may press Go design — the plan card
+   records who did. One resident task per card the launch queues, all or
+   nothing so a low allowance never launches half a plan. */
+app.post('/api/chat/:messageId/launch', async (req, res) => {
+  const message = requireChatPlan(req, res)
+  if (!message) return
+  if (!requireCanvas(req, res, message.canvasId, 'edit')) return
+  const plan = message.plan!
+  if (!isOpenPlan(plan)) return res.status(409).json({ error: `plan is ${plan.status}` })
+  const spent: Awaited<ReturnType<typeof allowance.consumeResidentTask>>[] = []
+  const refund = async () => {
+    for (const gate of spent) {
+      await allowance.refundResidentTask(gate, req.user!.id).catch((err) => {
+        console.error(`[chat] could not refund a resident task for ${req.user!.id}:`, err)
+      })
+    }
+  }
+  for (let i = 0; i < plan.screens.length; i++) {
+    const gate = await allowance.consumeResidentTask(req.user!.id)
+    if (!gate.ok) {
+      await refund()
+      return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
+    }
+    spent.push(gate)
+  }
+  const cards = actions.launchChatPlan(message, { name: req.user!.name, userId: req.user!.id })
+  if (!cards) {
+    /* a cancel or another launch landed while the meter was being written */
+    await refund()
+    return res.status(409).json({ error: 'plan is no longer open' })
+  }
+  /* the chat reports what Go design queued, in the plan's own thread, from
+     the same agent that proposed it */
+  actions.postChatMessage(message.canvasId, {
+    from: message.from,
+    agent: true,
+    threadId: message.id,
+    text:
+      `Go design — queued ${cards.length} card${cards.length === 1 ? '' : 's'} on the board: ` +
+      plan.screens.map((s) => `“${s.name}”`).join(', ') +
+      '. Watch them in the Agents tab.',
+  })
+  res.json({ message, cards })
+})
+
+/* Edit plan: the human's version replaces the proposed one and is marked
+   approved — the plan stayed open, just shaped by a person. */
+app.patch('/api/chat/:messageId/plan', (req, res) => {
+  const message = requireChatPlan(req, res)
+  if (!message) return
+  if (!requireCanvas(req, res, message.canvasId, 'edit')) return
+  const plan = cleanChatPlan(req.body?.plan)
+  if (!plan) return res.status(400).json({ error: 'not a plan' })
+  const updated = actions.editChatPlan(message.id, plan)
+  if (!updated) return res.status(409).json({ error: `plan is ${message.plan!.status}` })
+  res.json(updated)
+})
+
+app.post('/api/chat/:messageId/cancel', (req, res) => {
+  const message = requireChatPlan(req, res)
+  if (!message) return
+  if (!requireCanvas(req, res, message.canvasId, 'edit')) return
+  const updated = actions.cancelChatPlan(message.id)
+  if (!updated) return res.status(409).json({ error: `plan is ${message.plan!.status}` })
+  res.json(updated)
+})
+
+/* A failed ask the human wants another shot at — metered like a retry
+   everywhere else. */
+app.post('/api/chat/:messageId/retry', async (req, res) => {
+  const message = actions.findChatMessage(String(req.params.messageId))
+  if (!message?.forAgent) return res.status(404).json({ error: 'ask not found' })
+  if (!requireCanvas(req, res, message.canvasId, 'edit')) return
+  const gate = await allowance.consumeResidentTask(req.user!.id)
+  if (!gate.ok) {
+    return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
+  }
+  const retried = actions.retryChatAsk(message.id)
+  if (!retried) {
+    await allowance.refundResidentTask(gate, req.user!.id).catch((err) => {
+      console.error(`[chat] could not refund a resident task for ${req.user!.id}:`, err)
+    })
+    return res.status(409).json({ error: 'ask is not waiting for a retry' })
+  }
+  res.json(retried)
+})
+
 app.post('/api/comments/:id/resolve', (req, res) => {
   const found = actions.findComment(req.params.id)
   if (!found) return res.status(404).json({ error: 'comment not found' })
@@ -3087,6 +3232,7 @@ function joinAsGuest(ws: WebSocket, canvasId: string, clientId: string, canvas: 
     tasks: [],
     feedback: [],
     comments: [],
+    chat: [],
     decisions: [],
     proposals: [],
     selfColor: presence.color,
@@ -3199,6 +3345,7 @@ wss.on('connection', (ws, upgradeReq) => {
         tasks: actions.getTasks(msg.canvasId),
         feedback: actions.getFeedback(msg.canvasId),
         comments: actions.getComments(msg.canvasId),
+        chat: actions.getChat(msg.canvasId),
         decisions: actions.getDecisions(msg.canvasId),
         proposals: actions.getProposals(msg.canvasId),
         selfColor: presence.color,

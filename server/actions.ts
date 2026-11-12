@@ -37,6 +37,7 @@ import {
   type TokenType,
 } from '../shared/designTokens.ts'
 import { emitCanvasEvent } from './events.ts'
+import { CHAT_LOG_CAP, MAX_CHAT_TEXT_CHARS, chatPlanCardTitle, chatThreadId, isOpenPlan } from '../shared/chat.ts'
 import type {
   Actor,
   CanvasGuide,
@@ -44,6 +45,8 @@ import type {
   ActivityItem,
   AgentTask,
   CardScope,
+  ChatMessage,
+  ChatPlan,
   DesignDecision,
   ElementComment,
   Frame,
@@ -86,6 +89,7 @@ export function hydrateLogs(data: {
   tasks: Map<string, AgentTask[]>
   feedback: Map<string, TaskFeedback[]>
   comments: Map<string, ElementComment[]>
+  chat?: Map<string, ChatMessage[]>
   activity: Map<string, ActivityItem[]>
   decisions: Map<string, DesignDecision[]>
   proposals: Map<string, MemoryProposal[]>
@@ -93,6 +97,10 @@ export function hydrateLogs(data: {
   for (const [canvasId, list] of data.tasks) taskLog.set(canvasId, list)
   for (const [canvasId, list] of data.feedback) feedbackLog.set(canvasId, list)
   for (const [canvasId, list] of data.comments) commentLog.set(canvasId, list)
+  for (const [canvasId, list] of data.chat ?? []) {
+    chatLog.set(canvasId, list)
+    for (const m of list) chatById.set(m.id, m)
+  }
   for (const [canvasId, list] of data.activity) activityLog.set(canvasId, list)
   for (const [canvasId, list] of data.decisions) decisionLog.set(canvasId, list)
   for (const [canvasId, list] of data.proposals) proposalLog.set(canvasId, list)
@@ -134,6 +142,15 @@ function failInterruptedWork() {
         c.failedAt = now
         c.failureReason = reason
         persist.saveComment(c)
+      }
+    }
+  }
+  for (const [, list] of chatLog) {
+    for (const m of list) {
+      if (m.claimedBy && !m.answeredAt && !m.failedAt) {
+        m.failedAt = now
+        m.failureReason = reason
+        persist.saveChatMessage(m)
       }
     }
   }
@@ -220,6 +237,9 @@ export function pendingWorkAgents(canvasId: string): string[] {
   for (const c of [...(commentLog.get(canvasId) ?? [])].reverse()) {
     if (c.forAgent && !c.claimedBy && !c.failedAt && !c.resolvedAt) add(c.targetAgent ?? roleName(DEFAULT_ROLE_ID))
   }
+  for (const m of [...(chatLog.get(canvasId) ?? [])].reverse()) {
+    if (m.forAgent && !m.claimedBy && !m.failedAt && !m.answeredAt) add(m.targetAgent ?? roleName(DEFAULT_ROLE_ID))
+  }
   return names
 }
 
@@ -231,6 +251,9 @@ export interface NextWork {
   runner?: RunnerPick
   /** `payer` and the pick together: what one run claims, and what a sweep skips */
   key: string
+  /** the oldest item is a chat ask: the run takes the plan-only tool loop and
+   *  claims only chat messages, never cards/comments/feedback */
+  chat?: boolean
 }
 
 export function workKey(payer: string, runner: RunnerPick | undefined): string {
@@ -266,11 +289,12 @@ export function nextWork(canvasId: string, agentName: string, skip?: ReadonlySet
 /** The oldest claimable work the predicate does not pass over. */
 function oldestWork(canvasId: string, agentName: string, passOver: (work: NextWork) => boolean): NextWork | undefined {
   let oldest: { at: number; work: NextWork } | undefined
-  const consider = (at: number, userId: string | undefined, runner: RunnerPick | undefined) => {
+  const consider = (at: number, userId: string | undefined, runner: RunnerPick | undefined, chat = false) => {
     const payer = userId ?? ''
     const key = workKey(payer, runner)
     if (passOver({ payer, key })) return
-    if (!oldest || at < oldest.at) oldest = { at, work: { payer, ...(runner ? { runner } : {}), key } }
+    if (!oldest || at < oldest.at)
+      oldest = { at, work: { payer, ...(runner ? { runner } : {}), key, ...(chat ? { chat } : {}) } }
   }
   for (const card of taskLog.get(canvasId) ?? []) {
     if (card.queuedBy && !card.agentName && !card.failedAt && !card.endedAt && stageAgent(card) === agentName) {
@@ -291,6 +315,17 @@ function oldestWork(canvasId: string, agentName: string, passOver: (work: NextWo
   for (const f of feedbackLog.get(canvasId) ?? []) {
     if (!f.deliveredAt && !f.failedAt && (!f.targetAgent || f.targetAgent === agentName)) {
       consider(f.at, f.fromUserId, feedbackRunner(f))
+    }
+  }
+  for (const m of chatLog.get(canvasId) ?? []) {
+    if (
+      m.forAgent &&
+      !m.claimedBy &&
+      !m.failedAt &&
+      !m.answeredAt &&
+      (m.targetAgent ?? roleName(DEFAULT_ROLE_ID)) === agentName
+    ) {
+      consider(m.at, m.fromUserId, undefined, true)
     }
   }
   return oldest?.work
@@ -510,6 +545,8 @@ export function retryTaskFeedback(feedbackId: string, by: string): TaskFeedback 
 /* ------------------------------------------------------------------ */
 
 const commentLog = new Map<string, ElementComment[]>() // canvasId -> entries (newest first)
+const chatLog = new Map<string, ChatMessage[]>() // canvasId -> messages (newest first)
+const chatById = new Map<string, ChatMessage>() // message id -> the row, across canvases
 
 export function getComments(canvasId: string): ElementComment[] {
   return commentLog.get(canvasId) ?? []
@@ -1086,6 +1123,217 @@ export function resolveComment(commentId: string, by: string): ElementComment | 
     return c
   }
   return undefined
+}
+
+/* ------------------------------------------------------------------ */
+/* Canvas chat. The chat tab's log: human lines and the resident       */
+/* agent's replies — plain answers, questions back, and plan cards. A  */
+/* human message @mentioning an agent is an ask: it joins the resident */
+/* queue like an @mention comment and is answered by a plan-only run.  */
+/* ------------------------------------------------------------------ */
+
+export function getChat(canvasId: string): ChatMessage[] {
+  return chatLog.get(canvasId) ?? []
+}
+
+export function findChatMessage(id: string): ChatMessage | undefined {
+  return chatById.get(id)
+}
+
+/** The thread's messages, oldest first — what a chat run reads back. */
+export function chatThread(rootId: string): ChatMessage[] {
+  const root = chatById.get(rootId)
+  if (!root) return []
+  return [...(chatLog.get(root.canvasId) ?? [])]
+    .reverse()
+    .filter((m) => m.id === rootId || m.threadId === rootId)
+    .sort((a, b) => a.at - b.at)
+}
+
+export interface ChatPostInput {
+  from: string
+  /** absent on the agent's own lines */
+  fromUserId?: string
+  text: string
+  /** any message of the thread the reply belongs to; lands under its root */
+  threadId?: string
+  agent?: boolean
+  plan?: ChatPlan
+}
+
+/** One line into the log. Human text is scanned for an @mention — the agent
+ *  it names picks the line up as an ask. Agent lines carry no mention (it
+ *  does not command itself) and may carry a plan card. */
+export function postChatMessage(canvasId: string, input: ChatPostInput): ChatMessage | undefined {
+  const clean = input.text.trim().slice(0, MAX_CHAT_TEXT_CHARS)
+  if (!clean || !store.getCanvas(canvasId)) return undefined
+  let threadId: string | undefined
+  if (input.threadId) {
+    const ref = chatById.get(input.threadId)
+    if (!ref || ref.canvasId !== canvasId) return undefined
+    threadId = chatThreadId(ref)
+  }
+  const mentioned = input.agent ? undefined : mentionedRole(clean)
+  const list = chatLog.get(canvasId) ?? []
+  /* strictly increasing per canvas: thread order is reconstructed from `at`
+     after a restart, so two messages must never share a timestamp */
+  const at = Math.max(Date.now(), (list[0]?.at ?? 0) + 1)
+  const message: ChatMessage = {
+    id: nanoid(8),
+    canvasId,
+    ...(threadId ? { threadId } : {}),
+    from: input.from,
+    ...(input.fromUserId ? { fromUserId: input.fromUserId } : {}),
+    ...(input.agent ? { agent: true } : {}),
+    text: clean,
+    ...(input.plan ? { plan: input.plan } : {}),
+    at,
+    ...(mentioned ? { forAgent: true, targetAgent: mentioned.name } : {}),
+  }
+  list.unshift(message)
+  if (list.length > CHAT_LOG_CAP) {
+    for (const evicted of list.splice(CHAT_LOG_CAP)) chatById.delete(evicted.id)
+  }
+  chatLog.set(canvasId, list)
+  chatById.set(message.id, message)
+  persist.saveChatMessage(message)
+  broadcast(canvasId, { type: 'chat', message })
+  if (message.forAgent) {
+    /* the resident agent picks the ask up instantly (no-op without a key).
+       Dynamic import: resident depends on this module. */
+    import('./resident.ts').then((r) => r.onFeedback(canvasId)).catch(() => {})
+  }
+  return message
+}
+
+/** Open chat asks routed to this agent, claimed by it — oldest first. Chat
+ *  asks never carry a pick, so only a run on the Settings default claims
+ *  them (`runner` '' or unset). */
+export function takeChatAsksFor(canvasId: string, agentName: string, payer?: string, runner?: string): ChatMessage[] {
+  if (runner) return []
+  const pending = (chatLog.get(canvasId) ?? []).filter(
+    (m) =>
+      m.forAgent &&
+      !m.claimedBy &&
+      !m.failedAt &&
+      !m.answeredAt &&
+      (m.targetAgent ?? roleName(DEFAULT_ROLE_ID)) === agentName &&
+      (payer === undefined || (m.fromUserId ?? '') === payer),
+  )
+  for (const m of pending) {
+    m.claimedBy = agentName
+    m.claimedAt = Date.now()
+    persist.saveChatMessage(m)
+    broadcast(canvasId, { type: 'chat', message: m })
+  }
+  return pending.reverse()
+}
+
+/** The run answered the ask — claimed work settled, open or not. */
+export function answerChatAsk(id: string): ChatMessage | undefined {
+  const m = chatById.get(id)
+  if (!m || m.answeredAt || m.failedAt) return m
+  m.answeredAt = Date.now()
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  return m
+}
+
+/** The run could not answer: the ask stays visibly failed. */
+export function failChatAsk(id: string, reason: string): ChatMessage | undefined {
+  const m = chatById.get(id)
+  if (!m || m.answeredAt) return m
+  m.failedAt = Date.now()
+  m.failureReason = reason
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  return m
+}
+
+/** A failed ask the human wants another shot at: back to open, same as a
+ *  comment retry. */
+export function retryChatAsk(id: string): ChatMessage | undefined {
+  const m = chatById.get(id)
+  if (!m?.forAgent || m.answeredAt || !m.failedAt) return undefined
+  delete m.claimedBy
+  delete m.claimedAt
+  delete m.failedAt
+  delete m.failureReason
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  import('./resident.ts').then((r) => r.onFeedback(m.canvasId)).catch(() => {})
+  return m
+}
+
+/* ---- plan cards ---- */
+
+/** Write a changed plan back (a human's edit): the plan is marked approved —
+ *  a person has seen and shaped it — and stays launchable. */
+export function editChatPlan(
+  messageId: string,
+  plan: Pick<ChatPlan, 'summary' | 'screens' | 'openQuestions'>,
+): ChatMessage | undefined {
+  const m = chatById.get(messageId)
+  if (!m?.plan || !isOpenPlan(m.plan)) return undefined
+  m.plan = { ...plan, status: 'approved' }
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  return m
+}
+
+/** A new plan supersedes every still-open plan in its thread. */
+export function reviseChatPlans(canvasId: string, rootId: string, exceptId: string) {
+  for (const m of chatThread(rootId)) {
+    if (m.id === exceptId || !isOpenPlan(m.plan)) continue
+    m.plan = { ...m.plan, status: 'revised' }
+    persist.saveChatMessage(m)
+    broadcast(canvasId, { type: 'chat', message: m })
+  }
+}
+
+/** Cancel an open plan — the ask is already answered; this only closes the card. */
+export function cancelChatPlan(messageId: string): ChatMessage | undefined {
+  const m = chatById.get(messageId)
+  if (!m?.plan || !isOpenPlan(m.plan)) return undefined
+  m.plan = { ...m.plan, status: 'canceled' }
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  return m
+}
+
+/** Go design: queue one board card per planned screen, verbatim from the
+ *  plan, then mark it launched with the editor who pressed it. Confirmation
+ *  queues cards only — no agent step runs here, the ordinary sweep does. */
+export function launchChatPlan(
+  message: ChatMessage,
+  launcher: { name: string; userId: string },
+): AgentTask[] | undefined {
+  const plan = message.plan
+  if (!plan || !isOpenPlan(plan)) return undefined
+  const cards: AgentTask[] = []
+  for (const screen of plan.screens) {
+    const card = addQueuedCard(
+      message.canvasId,
+      chatPlanCardTitle(plan, screen),
+      launcher.name,
+      undefined,
+      undefined,
+      launcher.userId,
+    )
+    if (card) cards.push(card)
+  }
+  if (!cards.length) return undefined
+  message.plan = {
+    ...plan,
+    status: 'launched',
+    taskIds: cards.map((c) => c.id),
+    launchedBy: launcher.name,
+    launchedByUserId: launcher.userId,
+    launchedAt: Date.now(),
+  }
+  persist.saveChatMessage(message)
+  broadcast(message.canvasId, { type: 'chat', message })
+  return cards
 }
 
 /** Surface an agent's closing summary in the activity feed. */
