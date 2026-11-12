@@ -114,10 +114,42 @@ describe('claiming', () => {
     expect(actions.findChatMessage(b1.id)?.claimedBy).toBeUndefined()
   })
 
-  it('never claims on a named runner — chat asks ride the Settings default', () => {
+  it('an ask with no pick rides the Settings default, never a named runner', () => {
     ask('one')
     expect(actions.takeChatAsksFor(canvasId, AGENT, 'alice', 'claude-local|model|')).toEqual([])
     expect(actions.nextWork(canvasId, AGENT)).toMatchObject({ chat: true })
+  })
+
+  it('an ask sent with the picker runs on that connection, and so does its plan', () => {
+    const runner = { provider: 'chatgpt' as const, model: 'gpt-6-astra', effort: 'medium' }
+    const picked = actions.postChatMessage(canvasId, {
+      from: 'alice',
+      fromUserId: 'alice',
+      text: '@Doop plan the pricing page',
+      runner,
+    })!
+    expect(picked.runner).toEqual(runner)
+    expect(actions.nextWork(canvasId, AGENT)).toMatchObject({ chat: true, runner })
+    /* the default run passes it over; the picked connection claims it */
+    expect(actions.takeChatAsksFor(canvasId, AGENT, 'alice', '')).toEqual([])
+    const claimed = actions.takeChatAsksFor(canvasId, AGENT, 'alice', 'chatgpt|gpt-6-astra|medium')
+    expect(claimed.map((m) => m.id)).toEqual([picked.id])
+    /* Go design queues the screens on the same connection */
+    const plan = actions.postChatMessage(canvasId, {
+      from: AGENT,
+      agent: true,
+      threadId: picked.id,
+      text: 'plan',
+      runner,
+      plan: {
+        summary: 'Pricing',
+        screens: [{ name: 'Pricing', width: 1440, height: 900, outline: 'tiers' }],
+        openQuestions: [],
+        status: 'proposed',
+      } as unknown as ChatPlan,
+    })!
+    const cards = actions.launchChatPlan(plan, { name: 'alice', userId: 'alice' })
+    expect(cards?.[0]?.runner).toEqual(runner)
   })
 
   it('answer and fail settle the ask; retry reopens a failed one', () => {

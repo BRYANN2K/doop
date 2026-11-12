@@ -9,6 +9,8 @@ import { timeAgo } from '../lib/time'
 import { isComposingEnter } from '../lib/keys'
 import { isResidentLimit } from './TeamAllowance'
 import { refreshLocalRepo, useLocalRepo } from '../lib/localRepo'
+import { ModelPicker } from './ModelPicker'
+import { currentRunnerPick } from '../lib/runnerPick'
 import { Button } from './ui/button'
 import { IconButton } from './ui/icon-button'
 import { Input } from './ui/input'
@@ -28,6 +30,13 @@ const MAX_COMPOSER_LINES = 6
 
 /* feedback and plan launches are metered like any other resident task — a
    403 means the free tier ran out, so raise the connect wall */
+/** The composer's model pick rides on every ask, like a prompt-bar card's,
+ *  so the chat answers on what the picker beside the send button shows. */
+function runnerArg() {
+  const runner = currentRunnerPick()
+  return runner ? { runner } : {}
+}
+
 function reportLimit(err: unknown) {
   if (isResidentLimit(err)) useStore.getState().setLimitWall(true)
   else console.error(err)
@@ -199,7 +208,7 @@ function ReplyField({ root }: { root: ChatMessage }) {
     setSending(true)
     setFailed(false)
     try {
-      await api.sendChat(canvasId, { text, threadId: root.id })
+      await api.sendChat(canvasId, { text, threadId: root.id, ...runnerArg() })
       setDraft((current) => (current === draft ? '' : current))
     } catch (err) {
       setFailed(true)
@@ -376,7 +385,7 @@ function ReviseField({ canvasId, message }: { canvasId: string; message: ChatMes
     try {
       /* routed like the composer: the @mention turns it into an ask, the
          thread ties the next plan to this one */
-      await api.sendChat(canvasId, { text: `@Doop ${text}`, threadId: message.id })
+      await api.sendChat(canvasId, { text: `@Doop ${text}`, threadId: message.id, ...runnerArg() })
       setDraft('')
     } catch (err) {
       setFailed(true)
@@ -505,7 +514,7 @@ function ChatComposer({ canvasId }: { canvasId: string }) {
     setSending(true)
     setError(null)
     try {
-      await api.sendChat(canvasId, { text: clean })
+      await api.sendChat(canvasId, { text: clean, ...runnerArg() })
       posthog.capture('chat_message_sent')
       setText('')
     } catch (err) {
@@ -546,6 +555,7 @@ function ChatComposer({ canvasId }: { canvasId: string }) {
       />
       <div className="flex items-center gap-1">
         <span className="flex-1 text-caption text-ink-ghost">{canEdit && t('panels.chatMentionHint')}</span>
+        {canEdit && <ModelPicker disabled={sending} />}
         <IconButton
           variant="primary"
           size="lg"

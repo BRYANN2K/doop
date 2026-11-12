@@ -118,7 +118,7 @@ import {
   CUSTOM_API_TYPES,
 } from '../shared/customProvider.ts'
 import { setStoredDefault } from './agentDefaults.ts'
-import { isRunnerProvider } from '../shared/agentRunner.ts'
+import { isRunnerProvider, parseRunnerPick } from '../shared/agentRunner.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import { cleanChatPlan, isOpenPlan } from '../shared/chat.ts'
@@ -2730,11 +2730,14 @@ app.post('/api/canvases/:id/chat', async (req, res) => {
       return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
     }
   }
+  /* the composer's model picker, like a prompt-bar card's */
+  const runner = parseRunnerPick(req.body?.runner)
   const message = actions.postChatMessage(req.params.id, {
     from: req.user!.name,
     fromUserId: req.user!.id,
     text,
     threadId,
+    ...(runner ? { runner } : {}),
   })
   if (!message) {
     if (gate) {

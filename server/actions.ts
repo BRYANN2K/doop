@@ -325,7 +325,7 @@ function oldestWork(canvasId: string, agentName: string, passOver: (work: NextWo
       !m.answeredAt &&
       (m.targetAgent ?? roleName(DEFAULT_ROLE_ID)) === agentName
     ) {
-      consider(m.at, m.fromUserId, undefined, true)
+      consider(m.at, m.fromUserId, m.runner, true)
     }
   }
   return oldest?.work
@@ -1159,6 +1159,8 @@ export interface ChatPostInput {
   threadId?: string
   agent?: boolean
   plan?: ChatPlan
+  /** the composer's model pick for an ask */
+  runner?: RunnerPick
 }
 
 /** One line into the log. Human text is scanned for an @mention — the agent
@@ -1187,6 +1189,7 @@ export function postChatMessage(canvasId: string, input: ChatPostInput): ChatMes
     ...(input.agent ? { agent: true } : {}),
     text: clean,
     ...(input.plan ? { plan: input.plan } : {}),
+    ...(input.runner ? { runner: input.runner } : {}),
     at,
     ...(mentioned ? { forAgent: true, targetAgent: mentioned.name } : {}),
   }
@@ -1210,10 +1213,10 @@ export function postChatMessage(canvasId: string, input: ChatPostInput): ChatMes
  *  asks never carry a pick, so only a run on the Settings default claims
  *  them (`runner` '' or unset). */
 export function takeChatAsksFor(canvasId: string, agentName: string, payer?: string, runner?: string): ChatMessage[] {
-  if (runner) return []
   const pending = (chatLog.get(canvasId) ?? []).filter(
     (m) =>
       m.forAgent &&
+      (runner === undefined || runnerKey(m.runner) === runner) &&
       !m.claimedBy &&
       !m.failedAt &&
       !m.answeredAt &&
@@ -1319,6 +1322,8 @@ export function launchChatPlan(
       undefined,
       undefined,
       launcher.userId,
+      undefined,
+      message.runner,
     )
     if (card) cards.push(card)
   }

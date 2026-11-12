@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-repo-read"
+description = "Enables the repo_read command without any pre-configured scope."
+commands.allow = ["repo_read"]
+
+[[permission]]
+identifier = "deny-repo-read"
+description = "Denies the repo_read command without any pre-configured scope."
+commands.deny = ["repo_read"]

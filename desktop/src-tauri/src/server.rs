@@ -195,7 +195,11 @@ fn capability_for(server: &str) -> Result<String, String> {
 /// Lets a chosen server's pages use the shell's IPC. The bundled capability
 /// already covers the default server (and dev builds' local pages).
 pub fn grant(app: &AppHandle) -> Result<(), String> {
-    if !is_custom(app) {
+    // The bundled capability lists doop.design only. A shell built with
+    // DOOP_APP_URL opens another origin by default (so it is not "custom"),
+    // and that origin needs the same grant or every IPC call is refused.
+    let bundled = same_server(active(app), "https://doop.design");
+    if !is_custom(app) && (bundled || cfg!(debug_assertions)) {
         return Ok(());
     }
     let capability = capability_for(active(app))?;

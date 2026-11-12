@@ -591,6 +591,9 @@ export interface ChatMessage {
   text: string
   /** an agent-authored design plan this message carries */
   plan?: ChatPlan
+  /** the model connection a human ask was sent to (the composer's picker);
+   *  the plan it produces launches its cards on the same one */
+  runner?: RunnerPick
   at: number
   /* agent routing, same lifecycle as an @mention comment */
   forAgent?: boolean

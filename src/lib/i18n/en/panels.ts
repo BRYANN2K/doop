@@ -162,6 +162,8 @@ export const panels = {
   activityEmpty: 'No activity yet. Add a frame, or connect an agent.',
 
   localProjectTitle: 'Local project',
+  localProjectDesktopOnly:
+    'Open this canvas in the Doop desktop app to link a folder from your computer. Agents then read it, never write.',
   localProjectLink: 'Link a folder…',
   localProjectUnlink: 'Unlink',
   localProjectServed: 'agents can read it while this app is open',

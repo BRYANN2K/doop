@@ -448,7 +448,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
   /* a chat ask takes the plan-only loop instead: read tools, propose_plan
      and ask_in_chat — nothing that touches the canvas before a human
      presses Go design */
-  if (work.chat) return runChat(canvasId, role, payer, model, actor, stalled, key)
+  if (work.chat) return runChat(canvasId, role, payer, model, actor, stalled, key, runnerFilter)
   if (!model.userId && RESIDENT_TASK_LIMIT <= 0) {
     const reason =
       'The Doop Agent needs a connected account — connect your ChatGPT subscription or an OpenAI, OpenRouter, Gemini, DeepSeek, Kimi or Claude API key in Settings, then retry.'
@@ -1168,6 +1168,9 @@ function postAgentChat(
     text,
     ...(ref ? { threadId: ref.id } : {}),
     ...(plan ? { plan } : {}),
+    /* the plan remembers the connection its ask was sent to, so Go design
+       runs the screens on the model the person picked */
+    ...(ref?.runner ? { runner: ref.runner } : {}),
   })
 }
 
@@ -1276,8 +1279,10 @@ async function runChat(
   actor: Actor,
   stalled: Set<string>,
   key: string,
+  /** runnerKey of the connection this run answers on — only asks sent to it */
+  runnerFilter: string,
 ): Promise<RunOutcome> {
-  const asks = actions.takeChatAsksFor(canvasId, role.name, payer, '')
+  const asks = actions.takeChatAsksFor(canvasId, role.name, payer, runnerFilter)
   /* With no free tier the server's key never pays — the asks still fail
      visibly with the fix, like claimed cards do. */
   if (!model.userId && RESIDENT_TASK_LIMIT <= 0) {

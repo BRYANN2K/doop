@@ -10,6 +10,9 @@ const calls = vi.hoisted(() => ({
   editChatPlan: vi.fn(() => Promise.resolve({})),
   sendChat: vi.fn(() => Promise.resolve({})),
   retryChatAsk: vi.fn(() => Promise.resolve({})),
+  /* the composer's model picker lists the connections an ask can run on */
+  agentRunners: vi.fn(() => Promise.resolve({ runners: [] })),
+  agentModels: vi.fn(() => Promise.resolve({ models: [] })),
 }))
 
 vi.mock('../src/lib/posthog', () => ({ posthog: { capture: vi.fn() } }))

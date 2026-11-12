@@ -837,7 +837,7 @@ export const api = {
   retryTaskFeedback: (feedbackId: string) => req(`/api/feedback/${feedbackId}/retry`, { method: 'POST' }),
   /* the canvas chat: humans and the resident agent talk the next design over here */
   listChat: (canvasId: string) => req<ChatMessage[]>(`/api/canvases/${canvasId}/chat`),
-  sendChat: (canvasId: string, input: { text: string; threadId?: string; forAgent?: string }) =>
+  sendChat: (canvasId: string, input: { text: string; threadId?: string; forAgent?: string; runner?: RunnerPick }) =>
     req<ChatMessage>(`/api/canvases/${canvasId}/chat`, { method: 'POST', body: JSON.stringify(input) }),
   editChatPlan: (messageId: string, plan: Pick<ChatPlan, 'summary' | 'screens' | 'openQuestions'>) =>
     req<ChatMessage>(`/api/chat/${messageId}/plan`, { method: 'PATCH', body: JSON.stringify(plan) }),

@@ -162,6 +162,8 @@ export const panels: Catalog['panels'] = {
   activityEmpty: 'Nenhuma atividade ainda. Adicione um frame ou conecte um agente.',
 
   localProjectTitle: 'Projeto local',
+  localProjectDesktopOnly:
+    'Abra este canvas no app Doop para desktop para vincular uma pasta do seu computador. Os agentes só leem, nunca escrevem.',
   localProjectLink: 'Vincular uma pasta…',
   localProjectUnlink: 'Desvincular',
   localProjectServed: 'os agentes podem lê-lo enquanto o app estiver aberto',

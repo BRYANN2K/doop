@@ -965,6 +965,7 @@ export function saveChatMessage(m: ChatMessage) {
     answeredAt: m.answeredAt ?? null,
     failedAt: m.failedAt ?? null,
     failureReason: m.failureReason ?? null,
+    runner: m.runner ? JSON.stringify(m.runner) : null,
   }
   swallow(
     db
@@ -1293,6 +1294,7 @@ export async function hydrate(): Promise<Hydrated> {
       ...(row.agent ? { agent: true } : {}),
       text: row.text,
       ...(row.plan != null ? { plan: row.plan } : {}),
+      ...runnerField(row.runner),
       at: row.at,
       ...(row.forAgent ? { forAgent: true } : {}),
       ...(row.targetAgent != null ? { targetAgent: row.targetAgent } : {}),

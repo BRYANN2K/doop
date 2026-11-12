@@ -447,6 +447,8 @@ export const chatMessages = pgTable(
     answeredAt: bigint('answered_at', { mode: 'number' }),
     failedAt: bigint('failed_at', { mode: 'number' }),
     failureReason: text('failure_reason'),
+    /** JSON RunnerPick — the model connection the ask was sent to */
+    runner: text('runner'),
   },
   (t) => [index('chat_messages_canvas_idx').on(t.canvasId)],
 )

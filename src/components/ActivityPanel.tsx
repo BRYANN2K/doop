@@ -24,8 +24,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CommentIcon,
-  FolderIcon,
-  FolderPlusIcon,
   MessageSquareIcon,
   PulseIcon,
   SparkIcon,
@@ -36,14 +34,6 @@ import { isResidentLimit } from './TeamAllowance'
 import { CommentsPanel } from './CommentsPanel'
 import { ChatPanel } from './ChatPanel'
 import { PromptBar } from './PromptBar'
-import {
-  hasLocalRepo,
-  linkLocalProject,
-  refreshLocalRepo,
-  repoDeviceId,
-  unlinkLocalProject,
-  useLocalRepo,
-} from '../lib/localRepo'
 import { taskFrameId } from '../lib/taskFrame'
 import { useOpenThreadCount } from '../lib/comments'
 import { useT } from '@/lib/i18n'
@@ -164,7 +154,6 @@ export function ActivityPanel({
         <PanelTabPanel value="tasks" className={tabEnter}>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
             <RecentTasks />
-            <LocalProjectRow canvasId={canvasId} />
           </div>
           {/* the composer briefs agents to change frames: editors only */}
           {canEdit && <PromptBar canvasId={canvasId} />}
@@ -183,103 +172,6 @@ export function ActivityPanel({
         </PanelTabPanel>
       </PanelTabsRoot>
     </Panel>
-  )
-}
-
-/**
- * The local-project row under the tasks list: the caller's own link between
- * this canvas and a folder on their computer. On the desktop app it offers
- * the native picker (repo.rs asks consent and keeps the path on-device); on
- * the web it only reports the link — the picker needs the shell. Agent reads
- * ride while the app holding the grant is open.
- */
-function LocalProjectRow({ canvasId }: { canvasId: string }) {
-  const t = useT()
-  const canEdit = useStore(canEditOpenCanvas)
-  const status = useLocalRepo((s) => s.status[canvasId])
-  const [busy, setBusy] = useState(false)
-  const desktop = hasLocalRepo()
-
-  useEffect(() => {
-    void refreshLocalRepo(canvasId).catch(() => {})
-  }, [canvasId])
-
-  if (!status) return null
-  const link = status.link
-  /* web with nothing to link, and view-only visitors, hide the row entirely */
-  if (!link && (!desktop || !canEdit)) return null
-
-  const pick = async () => {
-    setBusy(true)
-    try {
-      await linkLocalProject(canvasId)
-    } catch (error) {
-      console.error('link local project', error)
-    } finally {
-      setBusy(false)
-    }
-  }
-  const unlink = async () => {
-    if (!link) return
-    setBusy(true)
-    try {
-      await unlinkLocalProject(canvasId, link.id)
-    } catch (error) {
-      console.error('unlink local project', error)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <section aria-label={t('panels.localProjectTitle')} className="flex flex-none flex-col pb-1">
-      <h3 className="flex h-7 flex-none items-center px-3 text-[11.5px] font-normal text-ink-faint">
-        {t('panels.localProjectTitle')}
-      </h3>
-      {!link ? (
-        <div className="mx-1.5 flex items-center rounded-[8px] px-1.5 py-1.5">
-          <Button variant="ghost" size="pill" disabled={busy} onClick={() => void pick()}>
-            <FolderPlusIcon className="size-3.5" />
-            {t('panels.localProjectLink')}
-          </Button>
-        </div>
-      ) : (
-        <div className="mx-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-[2px] rounded-[8px] px-1.5 py-2 text-[12px] leading-[18px]">
-          <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-            <span className="grid size-4 flex-none place-items-center">
-              <FolderIcon className="size-3.5 text-ink-faint" />
-            </span>
-            <b className="truncate font-medium text-ink">{link.name}</b>
-          </span>
-          {canEdit && (
-            <Button
-              variant="bare"
-              size="inline"
-              className="flex-none text-ink-faint"
-              disabled={busy}
-              onClick={() => void unlink()}
-            >
-              {t('panels.localProjectUnlink')}
-            </Button>
-          )}
-          <span className="col-span-2 flex min-w-0 items-center gap-[7px] pl-[22px] text-[11px] text-ink-faint">
-            <Dot size="sm" tone={status.online ? 'done' : 'muted'} />
-            {status.deviceMismatch
-              ? t('panels.localProjectMismatch')
-              : status.online
-                ? desktop && repoDeviceId() === link.deviceId
-                  ? t('panels.localProjectServed')
-                  : t('panels.localProjectOnline')
-                : t('panels.localProjectOffline')}
-            {status.deviceMismatch && desktop && canEdit && (
-              <Button variant="link" size="inline" disabled={busy} onClick={() => void pick()}>
-                {t('panels.localProjectLinkHere')}
-              </Button>
-            )}
-          </span>
-        </div>
-      )}
-    </section>
   )
 }
 
