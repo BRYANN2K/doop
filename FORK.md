@@ -93,3 +93,11 @@ tailscale serve --bg http://<CLUSTERIP-DU-SVC-DOOP>:4400
 curl -sk https://<HOST>.<TAILNET>.ts.net/healthz
 curl -sk https://<HOST>.<TAILNET>.ts.net/mcp
 ```
+
+## Live instance (2026-11-12)
+
+- URL (tailnet only): https://bryann2k-infra-prod.tail35c61f.ts.net:8850
+- MCP: https://bryann2k-infra-prod.tail35c61f.ts.net:8850/mcp
+- Exposure: `tailscale serve --bg --https=8850 http://<doop ClusterIP>:4400` on bryann2k-infra. No Funnel, no cloudflared.
+- k3s namespace `doop`: `postgres-0` + `deploy/doop` (image `ghcr.io/bryann2k/doop:bryan-main`, public).
+- Dropped PR: #299 (component library). It would have added a second, parallel component system.
