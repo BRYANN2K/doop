@@ -66,6 +66,9 @@ Manifests dans `deploy/k3s/`. Le Service reste `ClusterIP` ; l'exposition se
 fait exclusivement via Tailscale Serve côté hôte. Pas d'ingress, pas de
 cloudflared, pas de Funnel.
 
+Instance déployée : `https://bryann2k-infra-prod.tail35c61f.ts.net:8850`
+(Serve :8850 → `svc/doop` ClusterIP :4400, tailnet only).
+
 ```bash
 # 0) vérifier le disque (>= 3 Go libres)
 df -h /
@@ -79,20 +82,38 @@ kubectl -n doop create secret generic doop-secrets \
   --from-literal=POSTGRES_PASSWORD="$DB_PASS" \
   --from-literal=DATABASE_URL="postgres://doop:$DB_PASS@postgres.doop.svc.cluster.local:5432/doop" \
   --from-literal=BETTER_AUTH_SECRET="$(openssl rand -hex 32)" \
-  --from-literal=BETTER_AUTH_URL="https://<HOST>.<TAILNET>.ts.net" \
-  --from-literal=SIGNUP_EMAIL_DOMAINS="<domaine-de-bryan>"
+  --from-literal=BETTER_AUTH_URL="https://bryann2k-infra-prod.tail35c61f.ts.net:8850" \
+  --from-literal=SIGNUP_EMAIL_DOMAINS=""   # ouvert ; à restreindre après le 1er compte
 
 kubectl apply -f deploy/k3s/postgres.yaml -f deploy/k3s/doop.yaml
 kubectl -n doop rollout status deploy/doop
 
 # 3) exposition Tailscale Serve (sur l'hôte, comme les autres services)
-tailscale serve --bg http://<CLUSTERIP-DU-SVC-DOOP>:4400
-# ou : tailscale serve --bg --set-path / http://127.0.0.1:<nodeport-loopback>
+tailscale serve --bg --https=8850 http://$(kubectl -n doop get svc doop -o jsonpath='{.spec.clusterIP}'):4400
 
 # 4) vérifs
-curl -sk https://<HOST>.<TAILNET>.ts.net/healthz
-curl -sk https://<HOST>.<TAILNET>.ts.net/mcp
+curl -sk https://bryann2k-infra-prod.tail35c61f.ts.net:8850/healthz
+curl -sk https://bryann2k-infra-prod.tail35c61f.ts.net:8850/mcp   # 405 = endpoint MCP présent (POST only)
 ```
+
+### Image privée GHCR : contournement utilisé
+
+Le package `ghcr.io/bryann2k/doop` est **privé** par défaut ; sans PAT
+`read:packages` le cluster ne peut pas le tirer. Déploiement effectué en
+buildant l'image `linux/amd64` hors VPS et en l'important directement dans
+containerd (`imagePullPolicy: IfNotPresent` dans `deploy/k3s/doop.yaml`) :
+
+```bash
+docker build --platform linux/amd64 -t ghcr.io/bryann2k/doop:bryan-main .
+docker save ghcr.io/bryann2k/doop:bryan-main | gzip > doop-image.tar.gz
+scp doop-image.tar.gz <vps>:/tmp/
+ssh <vps> 'sudo k3s ctr -n k8s.io images import /tmp/doop-image.tar.gz'
+```
+
+Pour revenir à un pull GHCR normal : rendre le package public dans les
+réglages du package GitHub, ou créer un PAT `read:packages` et un
+`imagePullSecret` dans le namespace `doop`, puis repasser
+`imagePullPolicy: Always`.
 
 ## Live instance (2026-11-12)
 
