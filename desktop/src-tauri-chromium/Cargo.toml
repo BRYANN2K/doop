@@ -39,6 +39,9 @@ serde_json = "1"
 toml_edit = "0.25"
 tempfile = "3"
 rfd = "0.16"
+# Local-project reads (../src-tauri/src/repo.rs), in step with ../src-tauri.
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
 tokio = { version = "1", features = ["time"] }
 # The check that a server picked in the app is a Doop server (src/server.rs);
 # the same reqwest and ring-backed rustls the updater already links.
