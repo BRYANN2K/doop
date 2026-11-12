@@ -244,6 +244,9 @@ export function Stage({
     setLabelLayer(el)
   }, [])
   const zoomLabelRef = useRef<HTMLSpanElement>(null)
+  /* the ruler guides read --zoom for their counter-scaled hairline; their
+     layer sits outside the world, so the variable reaches them here */
+  const guidesLayerRef = useRef<HTMLDivElement>(null)
   const setViewport = useStore((s) => s.setViewport)
   const canvas = usePageCanvas()
   const lods = useFrameLods(ref, canvas?.frames ?? NO_FRAMES)
@@ -321,6 +324,7 @@ export function Stage({
         zoomVar = String(vp.zoom)
         world.style.setProperty('--zoom', zoomVar)
         labels.style.setProperty('--zoom', zoomVar)
+        guidesLayerRef.current?.style.setProperty('--zoom', zoomVar)
       }
       /* the camera's offset, for chrome drawn in screen px (FrameLabelLayer) */
       labels.style.setProperty('--vx', `${vp.x}px`)
@@ -1207,7 +1211,9 @@ export function Stage({
             {/* the selected frame's size badge, in screen px (FrameLabelLayer); after
                 the world so no frame, however it stacks, covers it */}
             <div className="pointer-events-none absolute inset-0" ref={attachLabelLayer} />
-            {showRulers && <Rulers stage={ref} />}
+            <div className="contents" ref={guidesLayerRef}>
+              {showRulers && <Rulers stage={ref} />}
+            </div>
           </div>
         </ContextMenuTrigger>
         <FollowFrame />
