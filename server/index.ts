@@ -28,6 +28,9 @@ import type { LocaleConfig } from '../shared/locales.ts'
 import { FIRST_CANVAS_PATH, SIGNUP_PARAM, parseSignupMethod } from '../shared/firstCanvas.ts'
 import { localAgentRouter, handleLocalAgentMcp, wake as wakeUserWork } from './localAgent.ts'
 import { deleteLink, linkFor, localRepo, localRepoRouter, putLink } from './localRepo.ts'
+import { localDriftRouter } from './driftBridge.ts'
+import { compareFrameWithUrl, driftErrorMessage, getComparison, listComparisons } from './drift.ts'
+import { classifyDriftUrl } from '../shared/drift.ts'
 import { handleGeminiCloudMcp } from './geminiCloudMcp.ts'
 import { geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import http from 'node:http'
@@ -66,7 +69,7 @@ import {
   roomMessageNeeds,
 } from './access.ts'
 import { isLinkAccess, roleAllows, type CanvasRole } from '../shared/canvasRole.ts'
-import { auth, initAuth, syncAdmins, getUserName, loginProvidersConfig } from './auth.ts'
+import { auth, initAuth, syncAdmins, getUserName, isBanned, loginProvidersConfig } from './auth.ts'
 import { getInstanceSettings, hydrateInstanceSettings, loginPolicy } from './instanceSettings.ts'
 import { adminRouter } from './admin.ts'
 import { communityRouter, parseListing, publishableFrames } from './community.ts'
@@ -772,6 +775,71 @@ app.post('/ingest/:key', express.json({ limit: '10mb', type: () => true }), (req
   })
 })
 
+/* ------------------------------------------------------------------ */
+/* CI drift hook (server/drift.ts): an agent key posts the deploy's     */
+/* preview URL for a frame and gets the same designed-vs-shipped        */
+/* comparison the in-app action runs. Mounted before the session gate — */
+/* the key IS the credential, like /ingest.                             */
+/* ------------------------------------------------------------------ */
+
+const driftWebhookHits = new Map<string, number[]>()
+
+app.post('/api/canvases/:id/drift', async (req, res) => {
+  const bearer = /^bearer\s+(.+)$/i.exec(req.headers.authorization ?? '')?.[1] ?? ''
+  if (!agentKeys.isAgentKeySecret(bearer)) {
+    return res.status(401).json({ error: 'an agent key is required (Authorization: Bearer dpk_…)' })
+  }
+  const verified = await agentKeys.verifyAgentKey(bearer)
+  const userId = verified?.userId
+  if (!userId) return res.status(401).json({ error: 'invalid agent key' })
+  if (await isBanned(userId)) return res.status(403).json({ error: 'this account is suspended' })
+  const now = Date.now()
+  const hits = (driftWebhookHits.get(userId) ?? []).filter((t) => now - t < 60_000)
+  if (hits.length >= env.DRIFT_WEBHOOKS_PER_MIN) {
+    return res
+      .status(429)
+      .json({ error: `rate limited — at most ${env.DRIFT_WEBHOOKS_PER_MIN} drift comparisons a minute` })
+  }
+  hits.push(now)
+  driftWebhookHits.set(userId, hits)
+  /* the loadFirst middleware sits behind the session gate, so this route
+     brings its canvas into memory itself */
+  await store.load(req.params.id)
+  res.once('close', store.hold(req.params.id))
+  const canvas = store.getCanvas(req.params.id)
+  if (!canvas) return res.status(404).json({ error: 'not found' })
+  if (!roleAllows(canvasRole(userId, canvas), 'edit')) {
+    return res.status(403).json({ error: "this key's account cannot edit this canvas" })
+  }
+  const frameId = String(req.body?.frameId ?? '')
+  const frame = canvas.frames.find((f) => f.id === frameId)
+  if (!frame) return res.status(404).json({ error: 'frame not found on this canvas' })
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim() : ''
+  if (!url || url.length > 2048) return res.status(400).json({ error: 'url required' })
+  /* a CI has no desktop: local URLs are refused up front rather than left
+     to time out inside the capture */
+  if (classifyDriftUrl(url).kind === 'local') {
+    return res
+      .status(422)
+      .json({
+        error: 'local URLs are fetched through the doop desktop app — run the compare from the app, not from CI',
+      })
+  }
+  try {
+    const { comparison, shipped } = await compareFrameWithUrl({
+      frame,
+      url,
+      actor: actions.resolveActor({ name: (await getUserName(userId)) ?? 'CI', kind: 'agent' }),
+      userId,
+      source: 'webhook',
+    })
+    res.status(201).json({ comparison, shippedFrame: shipped })
+  } catch (error) {
+    const { status, message } = driftErrorMessage(error)
+    res.status(status).json({ error: message })
+  }
+})
+
 /* everything else under /api requires a logged-in user; the session's user
    is authoritative for names — clients don't get to pick who they are */
 interface SessionUser {
@@ -1034,6 +1102,7 @@ function requireFrame(
 
 app.use('/api/local-agent', localAgentRouter)
 app.use('/api/local-repo', localRepoRouter)
+app.use('/api/local-drift', localDriftRouter)
 app.use('/api/image-descriptions', imageDescriptions.imageDescriptionsRouter)
 app.use('/api/notifications', notificationsRouter)
 app.use('/api/webhooks', webhooksRouter)
@@ -2629,6 +2698,66 @@ app.post('/api/frames/:id/element-id', async (req, res) => {
   const stamped = await actions.ensureElementId(frame.id, selector, req.user!.name, snippet || undefined)
   if (!stamped) return res.status(409).json({ error: 'the element could not be found in the frame right now' })
   res.json({ elementId: stamped.id, frameUpdatedAt: stamped.frame.updatedAt })
+})
+
+/* ------------------------------------------------------------------ */
+/* Drift review (server/drift.ts): compare the designed frame with the  */
+/* shipped page at a URL — capture, "Shipped" frame beside it, pixel    */
+/* score. Analyze queues the card whose run posts the gaps as           */
+/* severity-tagged comments.                                            */
+/* ------------------------------------------------------------------ */
+
+app.post('/api/frames/:id/drift', async (req, res) => {
+  const frame = requireFrame(req, res, req.params.id, 'edit')
+  if (!frame) return
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim() : ''
+  if (!url || url.length > 2048) return res.status(400).json({ error: 'url required' })
+  try {
+    const { comparison, shipped } = await compareFrameWithUrl({
+      frame,
+      url,
+      actor: actions.resolveActor({ name: req.user!.name, kind: 'user' }),
+      userId: req.user!.id,
+      source: 'ui',
+    })
+    res.status(201).json({ comparison, shippedFrame: shipped })
+  } catch (error) {
+    const { status, message } = driftErrorMessage(error)
+    res.status(status).json({ error: message })
+  }
+})
+
+app.get('/api/frames/:id/drift', async (req, res) => {
+  const frame = requireFrame(req, res, req.params.id, 'view')
+  if (!frame) return
+  res.json(await listComparisons(frame.id))
+})
+
+/* "Analyze the gaps": the comparison's card, claimed by the resident —
+   metered like any card ask since it spends a model run */
+app.post('/api/frames/:id/drift/:driftId/analyze', async (req, res) => {
+  const frame = requireFrame(req, res, req.params.id, 'edit')
+  if (!frame) return
+  const comparison = await getComparison(String(req.params.driftId))
+  if (!comparison || comparison.frameId !== frame.id) return res.status(404).json({ error: 'comparison not found' })
+  const gate = await allowance.consumeResidentTask(req.user!.id)
+  if (!gate.ok) {
+    return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
+  }
+  const card = actions.queueDriftCard(
+    frame.canvasId,
+    {
+      frameName: frame.name,
+      frameId: frame.id,
+      ...(comparison.shippedFrameId ? { shippedFrameId: comparison.shippedFrameId } : {}),
+      url: comparison.finalUrl ?? comparison.url,
+      ...(comparison.score !== undefined ? { score: comparison.score } : {}),
+      driftId: comparison.id,
+    },
+    req.user!.name,
+    req.user!.id,
+  )
+  res.status(201).json(card)
 })
 
 /* a comment pinned to a point on the canvas (world coordinates on one of its
