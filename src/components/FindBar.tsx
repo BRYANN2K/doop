@@ -7,6 +7,8 @@ import { canEditOpenCanvas, useStore } from '../lib/store'
 import { saveFrameHtml } from '../lib/layerEdits'
 import { findInHtml, replaceInHtml, type TextMatch } from '../lib/actions/findText'
 import { saveFramesHtml } from '../lib/actions/edits'
+import { api } from '../lib/api'
+import type { CanvasFindHit } from '../../shared/canvasFind'
 import { cn } from '@/lib/utils'
 import { Button } from './ui/button'
 import { IconButton } from './ui/icon-button'
@@ -20,6 +22,30 @@ interface Hit {
   /** the match's place among its frame's matches, which a single replace names */
   n: number
   match: TextMatch
+}
+
+/** Where ⌘F looks: the open page (find and replace, on the HTML the client
+ *  holds) or every page of the canvas (find only, answered by the server). */
+type Scope = 'page' | 'canvas'
+
+/** How long typing settles before an all-pages search asks the server. */
+const CANVAS_FIND_DEBOUNCE_MS = 220
+
+/* After an all-pages hit flies to another page, that page's HTML arrives a
+   moment later; the match inside the frame is picked once it is there. */
+function pickWhenLoaded(frameId: string, query: string, n: number, matchCase: boolean) {
+  const deadline = Date.now() + 4000
+  const tryPick = () => {
+    const s = useStore.getState()
+    const frame = s.canvas?.frames.find((f) => f.id === frameId)
+    if (frame?.html) {
+      const match = findInHtml(frame.html, query, { matchCase })[n]
+      if (match) s.pickElement({ frameId, selector: match.selector }, true)
+      return
+    }
+    if (Date.now() < deadline) window.setTimeout(tryPick, 150)
+  }
+  tryPick()
 }
 
 /**
@@ -46,6 +72,37 @@ export function FindBar({
   const [showReplace, setShowReplace] = useState(mode === 'replace')
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const canvasId = useStore((s) => s.canvas?.id)
+  const pageCount = useStore((s) => s.canvas?.pages?.length ?? 1)
+  /* a canvas with several pages (a library) is searched whole by default */
+  const [scope, setScope] = useState<Scope>(pageCount > 1 ? 'canvas' : 'page')
+  const [remote, setRemote] = useState<{ q: string; hits: CanvasFindHit[]; total: number; frames: number } | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  useEffect(() => {
+    if (scope !== 'canvas' || !canvasId) return
+    const q = query.trim()
+    if (!q) return
+    let stale = false
+    const timer = window.setTimeout(() => {
+      setSearching(true)
+      api
+        .findInCanvas(canvasId, q, matchCase)
+        .then((r) => {
+          if (!stale) setRemote({ q, ...r })
+        })
+        .catch(() => {
+          if (!stale) setRemote({ q, hits: [], total: 0, frames: 0 })
+        })
+        .finally(() => {
+          if (!stale) setSearching(false)
+        })
+    }, CANVAS_FIND_DEBOUNCE_MS)
+    return () => {
+      stale = true
+      window.clearTimeout(timer)
+    }
+  }, [scope, canvasId, query, matchCase])
 
   /* ⌘F again (or ⌥⌘F) while open puts the keyboard back in the field */
   const [seenMode, setSeenMode] = useState(mode)
@@ -64,9 +121,23 @@ export function FindBar({
       findInHtml(frame.html, query, { matchCase }).map((match, n) => ({ frame, n, match })),
     )
   }, [page?.frames, query, matchCase])
-  const active = hits.length ? Math.min(cursor, hits.length - 1) : -1
+  /* an answer for an older query is not shown while the new one is asked */
+  const remoteHits = scope === 'canvas' && remote?.q === query.trim() ? remote.hits : []
+  const listLength = scope === 'canvas' ? remoteHits.length : hits.length
+  const active = listLength ? Math.min(cursor, listLength - 1) : -1
+
+  function goRemote(index: number) {
+    const hit = remoteHits[index]
+    if (!hit) return
+    setCursor(index)
+    const s = useStore.getState()
+    s.select(hit.frameId)
+    s.requestFlyTo(hit.frameId)
+    if (hit.where === 'text') pickWhenLoaded(hit.frameId, query.trim(), hit.n, matchCase)
+  }
 
   function go(index: number) {
+    if (scope === 'canvas') return goRemote(index)
     const hit = hits[index]
     if (!hit) return
     setCursor(index)
@@ -77,8 +148,8 @@ export function FindBar({
   }
 
   function move(dir: 1 | -1) {
-    if (!hits.length) return
-    go(active === -1 ? 0 : (active + dir + hits.length) % hits.length)
+    if (!listLength) return
+    go(active === -1 ? 0 : (active + dir + listLength) % listLength)
   }
 
   /* the menus' Find next / previous */
@@ -121,9 +192,14 @@ export function FindBar({
 
   const count = !query.trim()
     ? ''
-    : hits.length
-      ? t('actions.findCount', { current: active + 1, total: hits.length })
-      : t('actions.findNone')
+    : scope === 'canvas' && (searching || remote?.q !== query.trim())
+      ? '…'
+      : listLength
+        ? t('actions.findCount', {
+            current: active + 1,
+            total: scope === 'canvas' ? (remote?.total ?? listLength) : listLength,
+          })
+        : t('actions.findNone')
 
   return (
     <div
@@ -161,6 +237,20 @@ export function FindBar({
           aria-label={t('actions.findPlaceholder')}
           trailing={<span className="flex-none font-mono text-caption text-ink-faint">{count}</span>}
         />
+        {pageCount > 1 && (
+          <IconButton
+            size="sm"
+            aria-label={t('actions.findAllPages')}
+            title={t('actions.findAllPages')}
+            on={scope === 'canvas'}
+            onClick={() => {
+              setScope((v) => (v === 'canvas' ? 'page' : 'canvas'))
+              setCursor(0)
+            }}
+          >
+            <span className="font-mono text-caption">{t('actions.findAllPagesShort')}</span>
+          </IconButton>
+        )}
         <IconButton
           size="sm"
           aria-label={t('actions.matchCase')}
@@ -169,17 +259,17 @@ export function FindBar({
         >
           <span className="font-mono text-caption">Aa</span>
         </IconButton>
-        <IconButton size="sm" aria-label={t('actions.previousMatch')} disabled={!hits.length} onClick={() => move(-1)}>
+        <IconButton size="sm" aria-label={t('actions.previousMatch')} disabled={!listLength} onClick={() => move(-1)}>
           <ArrowUpIcon width={14} height={14} aria-hidden />
         </IconButton>
-        <IconButton size="sm" aria-label={t('actions.nextMatch')} disabled={!hits.length} onClick={() => move(1)}>
+        <IconButton size="sm" aria-label={t('actions.nextMatch')} disabled={!listLength} onClick={() => move(1)}>
           <ArrowDownIcon width={14} height={14} aria-hidden />
         </IconButton>
         <IconButton size="sm" aria-label={t('actions.closeFind')} onClick={onClose}>
           <XIcon width={14} height={14} aria-hidden />
         </IconButton>
       </div>
-      {canEdit && showReplace && (
+      {canEdit && showReplace && scope === 'page' && (
         <div className="flex items-center gap-1 pl-7">
           <Input
             inputSize="sm"
@@ -204,7 +294,32 @@ export function FindBar({
           </Button>
         </div>
       )}
-      {hits.length > 0 && (
+      {scope === 'canvas' && remoteHits.length > 0 && (
+        <ul className="max-h-72 overflow-y-auto" aria-label={t('actions.findLabel')}>
+          {remoteHits.slice(0, 300).map((hit, i) => (
+            <li key={`${hit.frameId}:${hit.where}:${i}`}>
+              <Pressable
+                focus="none"
+                onClick={() => go(i)}
+                className={cn(
+                  'flex w-full flex-col items-start rounded-row px-2 py-1 text-left',
+                  i === active ? 'bg-paper-deep' : 'hover:bg-sub',
+                )}
+              >
+                <span className="w-full truncate text-caption text-ink-faint">
+                  {hit.pageName} · {hit.frameName}
+                </span>
+                <span className="w-full truncate text-body text-ink-soft">
+                  {hit.before}
+                  <mark className="rounded-tag bg-brand/20 text-ink">{hit.text}</mark>
+                  {hit.after}
+                </span>
+              </Pressable>
+            </li>
+          ))}
+        </ul>
+      )}
+      {scope === 'page' && hits.length > 0 && (
         <ul className="max-h-56 overflow-y-auto" aria-label={t('actions.findLabel')}>
           {hits.slice(0, 200).map((hit, i) => (
             <li key={`${hit.frame.id}:${i}`}>

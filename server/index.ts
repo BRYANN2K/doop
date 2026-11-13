@@ -119,6 +119,7 @@ import {
 } from '../shared/customProvider.ts'
 import { setStoredDefault } from './agentDefaults.ts'
 import { isRunnerProvider, parseRunnerPick } from '../shared/agentRunner.ts'
+import { findInCanvas } from './canvasFind.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import { cleanChatPlan, isOpenPlan } from '../shared/chat.ts'
@@ -2706,6 +2707,14 @@ app.post('/api/comments/:id/replies', async (req, res) => {
 /* design ask comes back as a plan card; only an editor's Go design    */
 /* turns it into board cards, one per screen.                          */
 /* ------------------------------------------------------------------ */
+
+/* ⌘F across every page: the client only holds the open page's HTML */
+app.get('/api/canvases/:id/find', (req, res) => {
+  const canvas = requireCanvas(req, res, req.params.id, 'view')
+  if (!canvas) return
+  const q = String(req.query.q ?? '').slice(0, 200)
+  res.json(findInCanvas(canvas, q, { matchCase: req.query.case === '1' }))
+})
 
 app.get('/api/canvases/:id/chat', (req, res) => {
   if (!requireCanvas(req, res, req.params.id, 'view')) return

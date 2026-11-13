@@ -151,6 +151,8 @@ export const actions: Catalog['actions'] = {
   replacePlaceholder: 'Substituir por',
   findCount: '{current} de {total}',
   findNone: 'Nenhum resultado',
+  findAllPages: 'Buscar em todas as páginas deste canvas',
+  findAllPagesShort: 'Tudo',
   matchCase: 'Diferenciar maiúsculas',
   previousMatch: 'Resultado anterior',
   nextMatch: 'Próximo resultado',

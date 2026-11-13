@@ -151,6 +151,8 @@ export const actions = {
   replacePlaceholder: 'Replace with',
   findCount: '{current} of {total}',
   findNone: 'No results',
+  findAllPages: 'Search every page of this canvas',
+  findAllPagesShort: 'All',
   matchCase: 'Match case',
   previousMatch: 'Previous match',
   nextMatch: 'Next match',
