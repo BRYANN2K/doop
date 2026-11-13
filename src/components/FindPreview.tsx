@@ -14,14 +14,21 @@ import { FramePreview } from './FramePreview'
  * injected into the document finds the element and posts its box back.
  */
 
-const htmlCache = new Map<string, Promise<string>>()
+interface Loaded {
+  html: string
+  width: number
+  height: number
+}
 
-function frameHtml(frameId: string): Promise<string> {
-  const local = useStore.getState().canvas?.frames.find((f) => f.id === frameId)?.html
-  if (local) return Promise.resolve(local)
+const htmlCache = new Map<string, Promise<Loaded>>()
+
+/* the open canvas's frames are in the store; a hit in another canvas is fetched */
+function frameHtml(frameId: string): Promise<Loaded> {
+  const local = useStore.getState().canvas?.frames.find((f) => f.id === frameId)
+  if (local?.html) return Promise.resolve({ html: local.html, width: local.width, height: local.height })
   let p = htmlCache.get(frameId)
   if (!p) {
-    p = api.frame(frameId).then((f) => f.html ?? '')
+    p = api.frame(frameId).then((f) => ({ html: f.html ?? '', width: f.width, height: f.height }))
     p.catch(() => htmlCache.delete(frameId))
     htmlCache.set(frameId, p)
   }
@@ -59,7 +66,7 @@ interface Box {
 export function FindPreview({ frameId, focus }: { frameId: string; focus: string }) {
   const frame = useStore((s) => s.canvas?.frames.find((f) => f.id === frameId))
   const wrapRef = useRef<HTMLDivElement>(null)
-  const [doc, setDoc] = useState<{ key: string; html: string } | null>(null)
+  const [doc, setDoc] = useState<{ key: string; html: string; width: number; height: number } | null>(null)
   const [box, setBox] = useState<{ key: string; box: Box | null } | null>(null)
   const [size, setSize] = useState({ w: 444, h: 220 })
   const key = `${frameId}\n${focus}`
@@ -68,12 +75,12 @@ export function FindPreview({ frameId, focus }: { frameId: string; focus: string
   useEffect(() => {
     let stale = false
     void frameHtml(frameId)
-      .then((html) => {
+      .then(({ html, width, height }) => {
         if (stale) return
         token.current += 1
         const finder = FINDER(`${token.current}`, focus)
         const withFinder = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${finder}</body>`) : html + finder
-        setDoc({ key, html: withFinder })
+        setDoc({ key, html: withFinder, width, height })
       })
       .catch(() => {})
     return () => {
@@ -99,8 +106,8 @@ export function FindPreview({ frameId, focus }: { frameId: string; focus: string
     return () => ro.disconnect()
   }, [])
 
-  const fw = frame?.width ?? 1440
-  const fh = frame?.height ?? 900
+  const fw = frame?.width ?? (doc?.key === key ? doc.width : 1440)
+  const fh = frame?.height ?? (doc?.key === key ? doc.height : 900)
   const target = box?.key === key ? box.box : null
   /* zoom on the matched component with a margin; otherwise fit the frame's width */
   let scale = size.w / fw

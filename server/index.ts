@@ -120,6 +120,7 @@ import {
 import { setStoredDefault } from './agentDefaults.ts'
 import { isRunnerProvider, parseRunnerPick } from '../shared/agentRunner.ts'
 import { findInCanvas } from './canvasFind.ts'
+import type { CanvasFindResult } from '../shared/canvasFind.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import { cleanChatPlan, isOpenPlan } from '../shared/chat.ts'
@@ -2707,6 +2708,28 @@ app.post('/api/comments/:id/replies', async (req, res) => {
 /* design ask comes back as a plan card; only an editor's Go design    */
 /* turns it into board cards, one per screen.                          */
 /* ------------------------------------------------------------------ */
+
+/* ⌘F everywhere: every canvas the user can open — find a library component
+   from any project. Each canvas's frame HTML is loaded on demand. */
+app.get('/api/find', async (req, res) => {
+  const q = String(req.query.q ?? '').slice(0, 200)
+  const matchCase = req.query.case === '1'
+  const out: CanvasFindResult = { hits: [], total: 0, frames: 0 }
+  for (const meta of workspaces.canvasesFor(req.user!.id)) {
+    const listed = store.getCanvas(meta.id)
+    if (!listed || !canvasRole(req.user!.id, listed)) continue
+    const canvas = await store.load(meta.id)
+    if (!canvas) continue
+    const r = findInCanvas(canvas, q, { matchCase })
+    out.total += r.total
+    out.frames += r.frames
+    for (const h of r.hits) {
+      if (out.hits.length >= 1500) break
+      out.hits.push({ ...h, canvasId: canvas.id, canvasName: canvas.name })
+    }
+  }
+  res.json(out)
+})
 
 /* ⌘F across every page: the client only holds the open page's HTML */
 app.get('/api/canvases/:id/find', (req, res) => {

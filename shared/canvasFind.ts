@@ -1,6 +1,9 @@
 /** ⌘F across every page of a canvas — the wire shape of GET /api/canvases/:id/find. */
 
 export interface CanvasFindHit {
+  /** set by the everywhere search, which spans canvases */
+  canvasId?: string
+  canvasName?: string
   frameId: string
   pageId: string
   pageName: string

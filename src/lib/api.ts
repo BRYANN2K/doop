@@ -839,6 +839,8 @@ export const api = {
   retryTaskFeedback: (feedbackId: string) => req(`/api/feedback/${feedbackId}/retry`, { method: 'POST' }),
   /* the canvas chat: humans and the resident agent talk the next design over here */
   listChat: (canvasId: string) => req<ChatMessage[]>(`/api/canvases/${canvasId}/chat`),
+  findEverywhere: (q: string, matchCase: boolean) =>
+    req<CanvasFindResult>(`/api/find?q=${encodeURIComponent(q)}${matchCase ? '&case=1' : ''}`),
   findInCanvas: (canvasId: string, q: string, matchCase: boolean) =>
     req<CanvasFindResult>(`/api/canvases/${canvasId}/find?q=${encodeURIComponent(q)}${matchCase ? '&case=1' : ''}`),
   sendChat: (canvasId: string, input: { text: string; threadId?: string; forAgent?: string; runner?: RunnerPick }) =>

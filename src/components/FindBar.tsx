@@ -8,6 +8,7 @@ import { saveFrameHtml } from '../lib/layerEdits'
 import { findInHtml, replaceInHtml, type TextMatch } from '../lib/actions/findText'
 import { saveFramesHtml } from '../lib/actions/edits'
 import { api } from '../lib/api'
+import { navigate } from '../lib/navigate'
 import type { CanvasFindHit } from '../../shared/canvasFind'
 import { cn } from '@/lib/utils'
 import { Button } from './ui/button'
@@ -28,13 +29,17 @@ interface Hit {
 
 /** Where ⌘F looks: the open page (find and replace, on the HTML the client
  *  holds) or every page of the canvas (find only, answered by the server). */
-type Scope = 'page' | 'canvas'
+type Scope = 'page' | 'canvas' | 'all'
+
+/** remote scopes are answered by the server, grouped by frame */
+const isRemote = (scope: Scope) => scope !== 'page'
 
 /** One frame in the all-pages results, with every match found in it. */
 interface FrameGroup {
   frameId: string
   pageId: string
   pageName: string
+  canvasName?: string
   /** library frames are named `<library_id> — <label>` */
   id: string | null
   label: string
@@ -64,6 +69,7 @@ function groupByFrame(hits: CanvasFindHit[], query: string): FrameGroup[] {
         frameId: hit.frameId,
         pageId: hit.pageId,
         pageName: hit.pageName,
+        ...(hit.canvasName ? { canvasName: hit.canvasName } : {}),
         ...splitFrameName(hit.frameName),
         hits: [],
         inside: [],
@@ -99,6 +105,12 @@ function relevance(g: FrameGroup, q: string): number {
 
 const looksLikeId = (s: string) => /^[a-z][\w-]*\.[\w.-]+$/i.test(s)
 const variantIds = (g: FrameGroup) => g.inside.filter((x) => looksLikeId(x.label))
+
+const SCOPE_LABEL = {
+  page: { short: 'actions.findScopePageShort', long: 'actions.findScopePage' },
+  canvas: { short: 'actions.findAllPagesShort', long: 'actions.findAllPages' },
+  all: { short: 'actions.findEverywhereShort', long: 'actions.findEverywhere' },
+} as const
 
 /** How long typing settles before an all-pages search asks the server. */
 const CANVAS_FIND_DEBOUNCE_MS = 220
@@ -147,19 +159,19 @@ export function FindBar({
   const canvasId = useStore((s) => s.canvas?.id)
   const pageCount = useStore((s) => s.canvas?.pages?.length ?? 1)
   /* a canvas with several pages (a library) is searched whole by default */
-  const [scope, setScope] = useState<Scope>(pageCount > 1 ? 'canvas' : 'page')
+  /* a single-page canvas is usually a project: searching everywhere reaches the library */
+  const [scope, setScope] = useState<Scope>(pageCount > 1 ? 'canvas' : 'all')
   const [remote, setRemote] = useState<{ q: string; hits: CanvasFindHit[]; total: number; frames: number } | null>(null)
   const [searching, setSearching] = useState(false)
 
   useEffect(() => {
-    if (scope !== 'canvas' || !canvasId) return
+    if (!isRemote(scope) || (scope === 'canvas' && !canvasId)) return
     const q = query.trim()
     if (!q) return
     let stale = false
     const timer = window.setTimeout(() => {
       setSearching(true)
-      api
-        .findInCanvas(canvasId, q, matchCase)
+      ;(scope === 'all' ? api.findEverywhere(q, matchCase) : api.findInCanvas(canvasId!, q, matchCase))
         .then((r) => {
           if (!stale) setRemote({ q, ...r })
         })
@@ -195,7 +207,7 @@ export function FindBar({
   }, [page?.frames, query, matchCase])
   /* an answer for an older query is not shown while the new one is asked */
   const remoteHits = useMemo(
-    () => (scope === 'canvas' && remote?.q === query.trim() ? remote.hits : []),
+    () => (isRemote(scope) && remote?.q === query.trim() ? remote.hits : []),
     [scope, remote, query],
   )
   /* all pages: one row per frame, stepped frame by frame */
@@ -204,11 +216,16 @@ export function FindBar({
   const [hovered, setHovered] = useState<string | null>(null)
   /* a variant picked in an expanded row: the preview frames that one */
   const [focusPick, setFocusPick] = useState<{ frameId: string; label: string } | null>(null)
-  const listLength = scope === 'canvas' ? groups.length : hits.length
+  const listLength = isRemote(scope) ? groups.length : hits.length
   const active = listLength ? Math.min(cursor, listLength - 1) : -1
 
   function flyToHit(hit: CanvasFindHit) {
     const s = useStore.getState()
+    /* a hit in another canvas opens it on that frame */
+    if (hit.canvasId && hit.canvasId !== s.canvas?.id) {
+      navigate(`/c/${hit.canvasId}?frame=${hit.frameId}`)
+      return
+    }
     s.select(hit.frameId)
     s.requestFlyTo(hit.frameId)
     if (hit.where === 'text') pickWhenLoaded(hit.frameId, query.trim(), hit.n, matchCase)
@@ -224,7 +241,7 @@ export function FindBar({
   }
 
   function go(index: number) {
-    if (scope === 'canvas') return goRemote(index)
+    if (isRemote(scope)) return goRemote(index)
     const hit = hits[index]
     if (!hit) return
     setCursor(index)
@@ -279,7 +296,7 @@ export function FindBar({
 
   const count = !query.trim()
     ? ''
-    : scope === 'canvas' && (searching || remote?.q !== query.trim())
+    : isRemote(scope) && (searching || remote?.q !== query.trim())
       ? '…'
       : listLength
         ? t('actions.findCount', {
@@ -294,7 +311,7 @@ export function FindBar({
       aria-label={t('actions.findLabel')}
       className={cn(
         'absolute z-40 flex flex-col gap-1.5 rounded-panel bg-surface p-2 shadow-float',
-        scope === 'canvas' ? 'w-[min(460px,calc(100vw-24px))]' : 'w-[min(360px,calc(100vw-24px))]',
+        isRemote(scope) ? 'w-[min(460px,calc(100vw-24px))]' : 'w-[min(360px,calc(100vw-24px))]',
       )}
       style={{ top: 'calc(var(--chrome-top, 0px) + 10px)', right: 'calc(var(--chrome-right, 0px) + 10px)' }}
     >
@@ -327,20 +344,19 @@ export function FindBar({
           aria-label={t('actions.findPlaceholder')}
           trailing={<span className="flex-none font-mono text-caption text-ink-faint">{count}</span>}
         />
-        {pageCount > 1 && (
-          <IconButton
-            size="sm"
-            aria-label={t('actions.findAllPages')}
-            title={t('actions.findAllPages')}
-            on={scope === 'canvas'}
-            onClick={() => {
-              setScope((v) => (v === 'canvas' ? 'page' : 'canvas'))
-              setCursor(0)
-            }}
-          >
-            <span className="font-mono text-caption">{t('actions.findAllPagesShort')}</span>
-          </IconButton>
-        )}
+        {/* where to look: this page → every page → every canvas */}
+        <IconButton
+          size="sm"
+          aria-label={t(SCOPE_LABEL[scope].long)}
+          title={t(SCOPE_LABEL[scope].long)}
+          on={isRemote(scope)}
+          onClick={() => {
+            setScope((v) => (v === 'page' ? (pageCount > 1 ? 'canvas' : 'all') : v === 'canvas' ? 'all' : 'page'))
+            setCursor(0)
+          }}
+        >
+          <span className="font-mono text-caption">{t(SCOPE_LABEL[scope].short)}</span>
+        </IconButton>
         <IconButton
           size="sm"
           aria-label={t('actions.matchCase')}
@@ -384,7 +400,7 @@ export function FindBar({
           </Button>
         </div>
       )}
-      {scope === 'canvas' && groups.length > 0 && (
+      {isRemote(scope) && groups.length > 0 && (
         <>
           {/* the frame under the pointer, else the active one, live and framed on what matched */}
           {(() => {
@@ -430,6 +446,7 @@ export function FindBar({
                         <span className="truncate font-mono text-caption text-ink">{g.id ?? g.label}</span>
                         <span className="truncate text-caption text-ink-faint">
                           {g.id ? `${g.label} · ` : ''}
+                          {scope === 'all' && g.canvasName ? `${g.canvasName} · ` : ''}
                           {g.pageName}
                         </span>
                       </span>
