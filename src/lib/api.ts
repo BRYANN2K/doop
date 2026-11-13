@@ -24,6 +24,7 @@ import type {
   Frame,
   FrameVersion,
   FrameVersionInfo,
+  LibraryCanvas,
   WorkspaceDetail,
   WorkspaceInvite,
   WorkspaceMember,
@@ -846,7 +847,16 @@ export const api = {
     req<ChatMessage>(`/api/chat/${messageId}/plan`, { method: 'PATCH', body: JSON.stringify(plan) }),
   launchChatPlan: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/launch`, { method: 'POST' }),
   cancelChatPlan: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/cancel`, { method: 'POST' }),
+  removeChatPlanReference: (messageId: string, screen: number, libraryId: string) =>
+    req<ChatMessage>(`/api/chat/${messageId}/plan/references`, {
+      method: 'DELETE',
+      body: JSON.stringify({ screen, libraryId }),
+    }),
   retryChatAsk: (messageId: string) => req<ChatMessage>(`/api/chat/${messageId}/retry`, { method: 'POST' }),
+  /* the reference library: the canvases the chat agent builds plans from */
+  getLibrary: () => req<{ canvases: LibraryCanvas[] }>('/api/library'),
+  setLibrary: (canvasIds: string[]) =>
+    req<{ canvases: LibraryCanvas[] }>('/api/library', { method: 'PUT', body: JSON.stringify({ canvasIds }) }),
   /* automations: scheduled pulls and agent tasks */
   listAutomations: () => req<Automation[]>('/api/automations'),
   getAutomation: (id: string) => req<Automation>(`/api/automations/${id}`),

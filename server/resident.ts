@@ -1083,6 +1083,7 @@ const CHAT_MAX_TURNS = 14
  *  write tool the model hallucinates is refused in execChatTool too. */
 export const CHAT_READ_TOOL_NAMES = new Set([
   'set_status',
+  'find_in_canvas',
   'inspect_frame',
   'get_frame_html',
   'screenshot_frame',
@@ -1096,7 +1097,7 @@ export const CHAT_READ_TOOL_NAMES = new Set([
 const CHAT_SYSTEM = `You are a resident agent of the Doop canvas — a multiplayer design tool where humans and AI agents design HTML frames together — answering in the canvas CHAT, not editing. Humans talk the next design over with you here; the canvas only changes after an editor presses "Go design" on a plan card, which queues one board card per screen.
 
 Rules:
-- You cannot change the canvas from chat: only read tools exist here. Look before you speak — inspect_frame, get_frame_html, screenshot_frame, get_tokens, get_prototype, get_reference, view_website, search_inspiration, and the repo_* tools when the asker linked a project.
+- You cannot change the canvas from chat: only read tools exist here. Look before you speak — find_in_canvas, inspect_frame, get_frame_html, screenshot_frame, get_tokens, get_prototype, get_reference, view_website, search_inspiration, and the repo_* tools when the asker linked a project.
 - Answer plain questions in your final message — it is posted to the thread. Keep it short: a chat bubble, not a document.
 - When the ask is design work — new screens, a redesign, a flow — investigate first, then end with ONE propose_plan call. The plan must stand on its own: what it is for, the screens to create with real sizes and what each shows, and the canvas or project pieces to reuse (token names, component names, file paths). When a reference library is listed in context, search it with find_references before planning: every screen names the library references it will reuse (canvas_id, frame_id, a label and why), and proposing none should mean the library genuinely had nothing close — an approved library frame wins over improvising one. Anything genuinely undecided goes into open_questions — the humans answer in chat before pressing Go design.
 - When you cannot produce a plan or an answer without a decision only a human can make, ask_in_chat one focused question and stop.
@@ -1747,6 +1748,25 @@ const TOOLS: Anthropic.Tool[] = [
         y: { type: 'number', description: 'Canvas position in px. Optional, see x.' },
       },
       required: ['name', 'width', 'height', 'html'],
+    },
+  },
+  {
+    name: 'find_in_canvas',
+    description:
+      'Search every page of a canvas for a term — frame names, the text a person reads, and string literals in scripts (sheets often render items from a JS array, so ids like cp.vui-otp-input live there). Returns the hit frames with page, where and a snippet. Use it to locate an existing screen or component before reusing it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The term to find' },
+        match_case: { type: 'boolean' },
+        limit: { type: 'number', description: 'Max hits returned (default 30)' },
+        canvas_id: {
+          type: 'string',
+          description:
+            'The canvas to search; omit for this canvas. Another canvas is searchable only when the requester can open it.',
+        },
+      },
+      required: ['query'],
     },
   },
   {
@@ -2490,6 +2510,34 @@ export async function execTool(
         runState.verifiedFrames.delete(f.id)
         return ok(
           `created frame ${f.id} ("${f.name}", ${Math.round(f.width)}x${Math.round(f.height)}) — it is revealing to viewers now`,
+        )
+      }
+      case 'find_in_canvas': {
+        const raw = block.input as { canvas_id?: string; query?: string; match_case?: boolean; limit?: number }
+        const target = typeof raw.canvas_id === 'string' && raw.canvas_id.trim() ? raw.canvas_id.trim() : canvasId
+        if (target !== canvasId && (!runState.payerId || !canReadCanvas(runState.payerId, target))) {
+          return fail(`canvas ${target} is not one the requester can read`)
+        }
+        const canvas = target === canvasId ? store.getCanvas(canvasId) : await store.load(target)
+        if (!canvas) return fail('canvas not found')
+        const query = String(raw.query ?? '').trim()
+        if (!query) return fail('query required')
+        const limit = Math.max(1, Math.min(Number(raw.limit) || 30, 100))
+        const result = findInCanvas(canvas, query, { matchCase: raw.match_case === true })
+        return ok(
+          JSON.stringify({
+            query,
+            total: result.total,
+            frames: result.frames,
+            returned: Math.min(limit, result.hits.length),
+            hits: result.hits.slice(0, limit).map((h) => ({
+              frame_id: h.frameId,
+              frame_name: h.frameName,
+              page_name: h.pageName,
+              where: h.where,
+              snippet: `${h.before}[${h.text}]${h.after}`,
+            })),
+          }),
         )
       }
       case 'inspect_frame': {

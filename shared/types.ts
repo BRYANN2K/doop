@@ -567,6 +567,14 @@ export interface ChatPlanReference {
   why: string
 }
 
+/** One canvas of a user's reference library, as GET /api/library reports it
+ *  — resolved to what the user can still open. */
+export interface LibraryCanvas {
+  id: string
+  name: string
+  frameCount: number
+}
+
 /** One screen a chat plan proposes: the card Go design queues is built from
  *  this verbatim, so the fields stay close to what a card needs. */
 export interface ChatPlanScreen {

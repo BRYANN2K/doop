@@ -46,6 +46,13 @@ export const settings = {
   imageDescriptionsReasonNoModel:
     'No upload model is available here. In My account mode, another canvas owner’s eligible account can still describe your uploads.',
 
+  libraryTitle: 'Reference library',
+  libraryDescription:
+    'The canvases the chat agent searches before it proposes a plan — and the only places a plan’s references may point. The plan card shows them as thumbnails for you to approve, and Go design hands them to the design agent as its base.',
+  libraryNoCanvases: 'No canvases yet — make one your design library (like “Design Library”), then tick it here.',
+  libraryFrames: { one: '{count} frame', other: '{count} frames' },
+  libraryCap: 'At most {count} canvases.',
+
   themeTitle: 'Theme',
   themeDescription:
     'Light or dark, across every canvas and page in this browser. System follows your operating system and switches whenever it does.',

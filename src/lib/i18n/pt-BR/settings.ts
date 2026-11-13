@@ -51,6 +51,13 @@ export const settings: Catalog['settings'] = {
   imageDescriptionsReasonNoModel:
     'Nenhum modelo para envios está disponível aqui. No modo Minha conta, uma conta elegível do dono de outro canvas ainda pode descrever seus envios.',
 
+  libraryTitle: 'Biblioteca de referências',
+  libraryDescription:
+    'Os canvases que o agente pesquisa antes de propor um plano — e os únicos lugares de onde as referências de um plano podem vir. O cartão do plano mostra miniaturas para você aprovar, e o Go design as entrega ao agente como base.',
+  libraryNoCanvases: 'Nenhum canvas ainda — crie um canvas de biblioteca (como “Design Library”) e marque-o aqui.',
+  libraryFrames: { one: '{count} frame', other: '{count} frames' },
+  libraryCap: 'No máximo {count} canvases.',
+
   themeTitle: 'Tema',
   themeDescription:
     'Claro ou escuro, em todos os canvases e páginas deste navegador. Sistema segue o seu sistema operacional e muda sempre que ele mudar.',
