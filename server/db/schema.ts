@@ -358,6 +358,8 @@ export const tasks = pgTable(
     payload: text('payload'),
     /** JSON CardScope: the frame/element the prompt was scoped to when queued */
     scope: text('scope'),
+    /** JSON ChatPlanReference[]: the library references a plan card carries — set at queue time, never updated */
+    references: text('references'),
     /** comma-joined ids of the frames edited while the task was open, most recent last */
     frameIds: text('frame_ids'),
     /** JSON RunnerPick: the connection and model the composer picked for a card */
