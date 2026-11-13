@@ -32,6 +32,7 @@
     "allow-claude-stop",
     "allow-claude-add-extension",
     "allow-codex-add-mcp",
+    "allow-drift-fetch",
     "allow-fonts-choose-local",
     "allow-fonts-read-local",
     "allow-repo-choose",

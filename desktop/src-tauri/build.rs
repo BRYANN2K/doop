@@ -20,6 +20,7 @@ fn main() {
             "claude_stop",
             "claude_add_extension",
             "codex_add_mcp",
+            "drift_fetch",
             "fonts_choose_local",
             "fonts_read_local",
             "repo_choose",
