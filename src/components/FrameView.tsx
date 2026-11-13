@@ -31,6 +31,8 @@ import { gesture } from '../lib/gesture'
 import { resolvePointerAction } from '../lib/tools'
 import { FrameContextMenu } from './FrameContextMenu'
 import { FrameApprovalBadge } from './FrameApproval'
+import { FrameLintBadge } from './FrameLintBadge'
+import { scheduleFrameLint } from '../lib/frameLint'
 import { ElementContextMenu, type LiveHit } from './ElementContextMenu'
 import { CodePanel } from './CodePanel'
 import { TextFormatToolbar } from './TextFormatToolbar'
@@ -933,6 +935,14 @@ export const FrameView = memo(function FrameView({
     }
   }, [runtimeReady, html, frame.html, frame.id, editing, suspendPost])
 
+  /* the anti-slop lint runs on the settled document the runtime confirmed:
+     streams re-arm it per chunk, edits per save */
+  const streaming = !!stream
+  useEffect(() => {
+    if (!runtimeDocument || runtimeDocument.html !== frame.html || streaming || editing) return
+    scheduleFrameLint(frame)
+  }, [runtimeDocument, frame, streaming, editing])
+
   /* ---- element comments ---- */
   const frameComments = useStore((s) => s.comments).filter((c) => c.frameId === frame.id)
   /* only thread roots get a pin; replies live inside the root's popover */
@@ -1783,6 +1793,7 @@ export const FrameView = memo(function FrameView({
               )}
               <span className="min-w-0 overflow-hidden text-ellipsis">{frame.name}</span>
               <FrameApprovalBadge frame={frame} />
+              <FrameLintBadge frame={frame} />
               <span className="flex shrink-0 gap-1 @max-[180px]/title:order-first">
                 {stream && (
                   <span

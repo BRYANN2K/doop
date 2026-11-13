@@ -3,6 +3,7 @@ import { FRAME_DROP_RUNTIME } from './frameDropRuntime'
 import { FRAME_PROTO_RUNTIME } from './frameProtoRuntime'
 import { FRAME_TEXT_RUNTIME } from './frameTextRuntime'
 import { CANVAS_MOD_CHORDS } from './keys'
+import { SLOP_COLLECTOR_SOURCE } from '../../shared/slopCollect'
 
 /**
  * Bootstrap document loaded once per frame iframe. The parent posts HTML in
@@ -39,6 +40,7 @@ const FRAME_BOOTSTRAP_TEMPLATE = `<!doctype html>
   ${FRAME_REPLAY_RUNTIME}
   ${FRAME_DROP_RUNTIME}
   ${FRAME_PROTO_RUNTIME}
+  ${SLOP_COLLECTOR_SOURCE}
   /* horizontal overscroll inside a frame must not chain to the parent page,
      where the browser turns it into a history back/forward swipe. Adopted
      sheet, not a <style> tag — the morph would wipe a tag from <head>. */
@@ -1661,6 +1663,13 @@ const FRAME_BOOTSTRAP_TEMPLATE = `<!doctype html>
     }
     if (d.type === 'doop:code') {
       parent.postMessage({ type: 'doop:code-result', reqId: d.reqId, html: elementCode(d.selector) }, '*')
+    }
+    if (d.type === 'doop:slop-snapshot') {
+      /* the lint collector (shared/slopCollect.ts), same source the server's
+         headless page evaluates — the parent scores the snapshot */
+      var lintSnap = null
+      try { lintSnap = collectSlopSnapshot() } catch (e) { lintSnap = null }
+      parent.postMessage({ type: 'doop:slop-snapshot-result', reqId: d.reqId, snapshot: lintSnap }, '*')
     }
     if (d.type === 'doop:snapshot') {
       /* the document as it stands, script-made elements included, for an

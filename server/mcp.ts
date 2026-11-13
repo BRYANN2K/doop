@@ -36,6 +36,7 @@ import * as workspaces from './workspaces.ts'
 import { auth, getUserName, isBanned } from './auth.ts'
 import { capture, captureThrottled } from './analytics.ts'
 import { renderFrame } from './screenshot.ts'
+import { lintAndStore } from './lint.ts'
 import { imagesForFrames } from './assets.ts'
 import type { FrameImage } from '../shared/imageDescriptions.ts'
 import { renderedHeight } from './renderLimits.ts'
@@ -1568,6 +1569,35 @@ export function buildMcpServer(
         frame.canvasId,
         [frame],
       )
+    },
+  )
+
+  server.registerTool(
+    'lint_frame',
+    {
+      title: 'Lint a frame for AI-slop patterns',
+      description:
+        'Run the anti-slop checks on a frame and get its score (0-100) and findings: each issue names the rule (AS-* ids from the Design Library rulebook), its severity, and the element it blames. The result persists on the frame and shows in the editor. Errors block a resident-agent task until fixed; call this after edits to confirm they cleared.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: { frame_id: z.string(), agent_name: agentName },
+    },
+    async ({ frame_id, agent_name }) => {
+      const f = frameFor(frame_id, 'view')
+      if (!f) return noFrame(frame_id)
+      const lint = await lintAndStore(frame_id, actorFrom(agent_name))
+      if (!lint) return text({ ok: false, error: 'lint could not run on this frame' })
+      return text({
+        ok: true,
+        frame: frameSummary(f),
+        lint: {
+          score: lint.score,
+          errors: lint.errors,
+          warnings: lint.warnings,
+          engine: lint.engine,
+          checkedAt: lint.checkedAt,
+          issues: lint.issues,
+        },
+      })
     },
   )
 

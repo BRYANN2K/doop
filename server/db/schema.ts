@@ -13,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { open, seal } from '../secretBox.ts'
 import type { CanvasGuide, CanvasPageInfo, ChatPlan, FrameApproval } from '../../shared/types.ts'
+import type { FrameLint } from '../../shared/slopRules.ts'
 import type { AutomationRunState, AutomationTrigger, Schedule, Step } from '../../shared/automations.ts'
 import type {
   ComponentCode,
@@ -196,6 +197,8 @@ export const frames = pgTable(
     /** degrees clockwise about the centre (shared/frameRotation.ts); null = 0 */
     rotation: doublePrecision('rotation'),
     approval: jsonb('approval').$type<FrameApproval>(),
+    /** latest anti-slop lint (shared/slopRules.ts); null = never linted */
+    lint: jsonb('lint').$type<FrameLint>(),
   },
   (t) => [index('frames_canvas_idx').on(t.canvasId)],
 )

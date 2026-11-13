@@ -131,7 +131,7 @@ import { isPeerViewport } from '../shared/viewport.ts'
 import { exportScaleSuffix, fitExportScale, parseExportScale } from '../shared/exportScale.ts'
 import { emailShare } from './canvasShares.ts'
 import * as userEvents from './userEvents.ts'
-import type { Canvas, ChatMessage, ClientMessage, Presence, ServerMessage } from '../shared/types.ts'
+import type { Canvas, ChatMessage, ClientMessage, Frame, Presence, ServerMessage } from '../shared/types.ts'
 
 const PORT = env.PORT
 
@@ -2573,6 +2573,37 @@ app.put('/api/frames/:id/approval', (req, res) => {
   if (status === 'ready_for_dev' && actions.isFrameStreaming(current.id))
     return res.status(409).json({ error: 'Wait for the design to finish before approving it.' })
   res.json(actions.setFrameApproval(current.id, status === 'ready_for_dev', req.user!))
+})
+
+/* the lint a client computed inside the frame's iframe, stored and relayed
+   to the room as frame:lint (the design itself is untouched) */
+const lintIssueBody = z.object({
+  ruleId: z.string().max(40),
+  severity: z.enum(['error', 'warning']),
+  message: z.string().max(400),
+  elementId: z.string().max(120).optional(),
+  selector: z.string().max(400).optional(),
+  detail: z.string().max(300).optional(),
+})
+const lintBody = z.object({
+  score: z.number().min(0).max(100),
+  errors: z.number().int().min(0).max(500),
+  warnings: z.number().int().min(0).max(500),
+  issues: z.array(lintIssueBody).max(60),
+  checkedAt: z.number().int().min(0).optional(),
+  version: z.number().int().min(0).max(100).optional(),
+  engine: z.enum(['dom', 'static']).optional(),
+  truncated: z.boolean().optional(),
+})
+
+app.put('/api/frames/:id/lint', (req, res) => {
+  if (!requireFrame(req, res, req.params.id, 'edit')) return
+  const parsed = lintBody.safeParse(req.body?.lint)
+  if (!parsed.success) return res.status(400).json({ error: 'bad lint payload' })
+  const lint = { ...parsed.data, checkedAt: parsed.data.checkedAt ?? Date.now() }
+  const frame = actions.setFrameLint(req.params.id, lint as Frame['lint'], userActor(req))
+  if (!frame) return res.status(404).json({ error: 'frame not found' })
+  res.json({ ok: true })
 })
 
 app.post('/api/frames/:id/append', (req, res) => {

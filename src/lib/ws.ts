@@ -247,6 +247,9 @@ function handle(msg: ServerMessage) {
     case 'frame:streaming':
       s.setStream(msg.frameId, msg.active ? { name: msg.actor.name, color: msg.actor.color } : null)
       break
+    case 'frame:lint':
+      s.patchFrameLocal(msg.frameId, { lint: msg.lint })
+      break
     case 'frame:deleted':
       s.removeFrame(msg.frameId)
       break

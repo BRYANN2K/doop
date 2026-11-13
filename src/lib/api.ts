@@ -620,6 +620,11 @@ export const api = {
       finish()
     }
   },
+  setFrameLint: (frameId: string, lint: Frame['lint']) =>
+    req<{ ok: boolean }>(`/api/frames/${frameId}/lint`, {
+      method: 'PUT',
+      body: JSON.stringify({ lint, actor: actor() }),
+    }),
   components: (canvasId: string) => req<ComponentInfo[]>(`/api/canvases/${canvasId}/components`),
   componentPreview: (canvasId: string, componentId: string) =>
     req<{ html: string; width: number; height: number; variants: number }>(
