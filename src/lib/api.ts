@@ -4,6 +4,7 @@ import { beginFrameSave } from './frameSaves'
 import type { StackWrite } from '../../shared/frameStack'
 import type { LocalAgentPreference, LocalAgentJob, LocalAgentResult } from '../../shared/localAgent'
 import type { RepoLink, RepoLinkStatus, RepoRequest, RepoResult } from '../../shared/localRepo'
+import type { HandoffFile, HandoffPack, HandoffWriteResult } from '../../shared/handoff'
 import type { ImageDescriptionMode, ImageDescriptionPreference } from '../../shared/imageDescriptions'
 import type { AgentRunners, RunnerPick, RunnerProvider } from '../../shared/agentRunner'
 import type { CanvasFindResult } from '../../shared/canvasFind'
@@ -445,6 +446,18 @@ export const api = {
     req<{ ok: boolean }>(`/api/local-repo/finish/${id}`, {
       method: 'POST',
       body: JSON.stringify({ deviceId, ...result }),
+    }),
+  /* Ready for dev → Stip: draft the pack, then write it into the linked
+     project through the desktop app's confirmed write */
+  buildHandoff: (canvasId: string, input: { frameIds?: string[]; planMessageId?: string; title?: string }) =>
+    req<{ pack: HandoffPack; link: { name: string } | null; writable: boolean }>(`/api/canvases/${canvasId}/handoff`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  writeHandoff: (canvasId: string, changeId: string, files: HandoffFile[]) =>
+    req<{ ok: boolean; result: HandoffWriteResult }>(`/api/canvases/${canvasId}/handoff/write`, {
+      method: 'POST',
+      body: JSON.stringify({ changeId, files }),
     }),
   listCanvases: () => req<CanvasMeta[]>('/api/canvases'),
   getCanvas: (id: string) => req<Canvas>(`/api/canvases/${id}`),

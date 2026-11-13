@@ -28,6 +28,7 @@ fn main() {
             "repo_list",
             "repo_read",
             "repo_search",
+            "repo_write_change",
             "server_status",
             "server_choose",
             "view_menu_state",

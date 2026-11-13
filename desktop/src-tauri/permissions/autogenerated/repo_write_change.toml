@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-repo-write-change"
+description = "Enables the repo_write_change command without any pre-configured scope."
+commands.allow = ["repo_write_change"]
+
+[[permission]]
+identifier = "deny-repo-write-change"
+description = "Denies the repo_write_change command without any pre-configured scope."
+commands.deny = ["repo_write_change"]

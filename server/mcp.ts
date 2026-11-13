@@ -37,6 +37,7 @@ import { auth, getUserName, isBanned } from './auth.ts'
 import { capture, captureThrottled } from './analytics.ts'
 import { renderFrame } from './screenshot.ts'
 import { lintAndStore } from './lint.ts'
+import { buildHandoffPack, HandoffError } from './handoff.ts'
 import { imagesForFrames } from './assets.ts'
 import type { FrameImage } from '../shared/imageDescriptions.ts'
 import { renderedHeight } from './renderLimits.ts'
@@ -2287,6 +2288,47 @@ export function buildMcpServer(
         )
       } catch (e) {
         return err(`screenshot failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    },
+  )
+
+  server.registerTool(
+    'create_handoff',
+    {
+      title: 'Build a Stip handoff pack',
+      description:
+        "Draft a Stip change pack ('Ready for dev') from canvas frames: proposal.md, spec.md with - AC-n: criteria, tasks.md, evidence.md, state.json, tokens.json (the canvas's design tokens) and PNG exports under assets/, all under .workflow/changes/<id>/. The pack is RETURNED, never written — write it into the linked project yourself (every file must be new). Pass your own proposal/spec/tasks to write the contract yourself; otherwise a template drafts the criteria. Frame ids pick which frames are exported (up to 6); without any, every non-demo frame goes.",
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      inputSchema: {
+        canvas_id: z.string(),
+        frame_ids: z.array(z.string()).max(24).optional().describe('Frames to export; omit for all non-demo frames'),
+        title: z.string().max(200).optional().describe('Pack title — also seeds the change id'),
+        change_id: z
+          .string()
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .max(100)
+          .optional()
+          .describe('The Stip change id (lowercase slug); one is minted when omitted'),
+        proposal: z.string().max(60000).optional().describe('Your own proposal.md, replacing the drafted one'),
+        spec: z.string().max(60000).optional().describe('Your own spec.md — keep the "- AC-n:" criteria lines'),
+        tasks: z.string().max(60000).optional().describe('Your own tasks.md'),
+        agent_name: agentName.optional(),
+      },
+    },
+    async ({ canvas_id, frame_ids, title, change_id, proposal, spec, tasks, agent_name }) => {
+      if (!canvasFor(canvas_id, 'view')) return noCanvas(canvas_id)
+      arrive(canvas_id, agent_name)
+      try {
+        const pack = await buildHandoffPack(canvas_id, {
+          frameIds: frame_ids,
+          title,
+          changeId: change_id,
+          docs: proposal || spec || tasks ? { proposal, spec, tasks } : undefined,
+        })
+        return text(pack)
+      } catch (e) {
+        if (e instanceof HandoffError) return err(e.message)
+        return err(`handoff failed: ${e instanceof Error ? e.message : String(e)}`)
       }
     },
   )

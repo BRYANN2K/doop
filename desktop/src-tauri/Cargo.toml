@@ -30,9 +30,11 @@ rfd = "0.16"
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time"] }
 # Local-project reads (src/repo.rs): link ids are uuids; repo_search's
-# `regex` arg takes a Rust-regex pattern.
+# `regex` arg takes a Rust-regex pattern; repo_write_change decodes the
+# pack's binary files (PNG assets) from base64.
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
+base64 = "0.22"
 # The check that a server picked in the app is a Doop server (src/server.rs);
 # the same reqwest and ring-backed rustls the updater already links.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }

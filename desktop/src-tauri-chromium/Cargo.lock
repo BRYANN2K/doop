@@ -1212,6 +1212,7 @@ dependencies = [
 name = "doop-desktop-chromium"
 version = "0.13.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "cef",
  "objc2",

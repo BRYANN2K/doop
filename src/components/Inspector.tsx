@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { Frame } from '../../shared/types'
-import { useStore } from '../lib/store'
+import { canEditOpenCanvas, useStore } from '../lib/store'
 import { api, errorMessage } from '../lib/api'
 import { beginFrameSave } from '../lib/frameSaves'
 import { copyFramePng, downloadFrameExport, downloadFrameHtml } from '../lib/frameExport'
@@ -11,10 +11,11 @@ import { deleteFrameTracked, recordUpdate, trackSave } from '../lib/history'
 import { setFramesLocked } from '../lib/layerEdits'
 import { FrameHistoryModal } from './FrameHistoryModal'
 import { FrameApprovalControl } from './FrameApproval'
+import { HandoffModal } from './HandoffModal'
 import { cn } from '@/lib/utils'
 import { Panel, PanelClose, PanelHeader, type PanelSurface } from './ui/panel'
 import { Collapsible, CollapsibleContent } from './ui/collapsible'
-import { CopyIcon, DownloadIcon, FrameIcon, LockIcon } from './ui/icons'
+import { ArrowRightIcon, CopyIcon, DownloadIcon, FrameIcon, LockIcon } from './ui/icons'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -52,6 +53,7 @@ export function Inspector({
 }) {
   const t = useT()
   const select = useStore((s) => s.select)
+  const canEdit = useStore(canEditOpenCanvas)
   /* the raw HTML editor is a power tool — collapsed by default so the panel
      reads as frame properties, not a code dump; the choice sticks */
   const [showHtml, setShowHtml] = useState(() => localStorage.getItem(HTML_OPEN_KEY) === '1')
@@ -62,6 +64,7 @@ export function Inspector({
   /* what the frame actually renders at: a huge frame caps a large pick */
   const exportScale = fitExportScale(frame, exportSettings.scale)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [handoffOpen, setHandoffOpen] = useState(false)
   const [htmlCopy, setHtmlCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const queuedSave = useRef<{ timer: number; finish: () => void } | null>(null)
@@ -230,6 +233,17 @@ export function Inspector({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <InspectorGroup title={t('inspector.groupDevelopment')}>
           <FrameApprovalControl key={frame.id} frame={frame} hasUnsavedChanges={saveState === 'dirty'} />
+          {canEdit && (
+            <Button
+              variant="bare"
+              className={cn(fillBtn, 'mt-1.5 w-full gap-1.5')}
+              title={t('handoff.actionTitle')}
+              onClick={() => setHandoffOpen(true)}
+            >
+              <ArrowRightIcon className="size-3.5" />
+              {t('handoff.action')}
+            </Button>
+          )}
         </InspectorGroup>
         <PropertyScrubContext.Provider value={boxScrub}>
           <InspectorGroup title={t('inspector.sectionPosition')}>
@@ -415,6 +429,13 @@ export function Inspector({
         </span>
       </footer>
       {historyOpen && <FrameHistoryModal frame={frame} onClose={() => setHistoryOpen(false)} />}
+      {handoffOpen && (
+        <HandoffModal
+          canvasId={frame.canvasId}
+          input={{ frameIds: [frame.id] }}
+          onClose={() => setHandoffOpen(false)}
+        />
+      )}
     </Panel>
   )
 }
