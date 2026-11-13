@@ -16,6 +16,7 @@ import { ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, XIcon } from './ui/icons'
 import { Input } from './ui/input'
 import { Pressable } from './ui/pressable'
 import { SearchField } from './ui/search-field'
+import { FramePreview } from './FramePreview'
 
 interface Hit {
   frame: Frame
@@ -27,6 +28,58 @@ interface Hit {
 /** Where ⌘F looks: the open page (find and replace, on the HTML the client
  *  holds) or every page of the canvas (find only, answered by the server). */
 type Scope = 'page' | 'canvas'
+
+/** One frame in the all-pages results, with every match found in it. */
+interface FrameGroup {
+  frameId: string
+  pageId: string
+  pageName: string
+  /** library frames are named `<library_id> — <label>` */
+  id: string | null
+  label: string
+  hits: CanvasFindHit[]
+  /** the distinct things matched inside: library ids when the snippet holds one */
+  inside: { label: string; hit: CanvasFindHit }[]
+}
+
+const LIBRARY_ID = /[a-z][\w-]*\.[\w.-]*[\w]/gi
+
+function splitFrameName(name: string): { id: string | null; label: string } {
+  const at = name.indexOf(' — ')
+  if (at > 0 && /^[\w.§-]+$/.test(name.slice(0, at).trim())) {
+    return { id: name.slice(0, at).trim(), label: name.slice(at + 3).trim() }
+  }
+  return { id: null, label: name }
+}
+
+function groupByFrame(hits: CanvasFindHit[], query: string): FrameGroup[] {
+  const q = query.trim().toLowerCase()
+  const groups: FrameGroup[] = []
+  const byId = new Map<string, FrameGroup>()
+  for (const hit of hits) {
+    let g = byId.get(hit.frameId)
+    if (!g) {
+      g = {
+        frameId: hit.frameId,
+        pageId: hit.pageId,
+        pageName: hit.pageName,
+        ...splitFrameName(hit.frameName),
+        hits: [],
+        inside: [],
+      }
+      byId.set(hit.frameId, g)
+      groups.push(g)
+    }
+    g.hits.push(hit)
+    if (hit.where === 'name') continue
+    /* a library sheet's matches are its variants' ids: list those, once each */
+    const around = hit.before + hit.text + hit.after
+    const ids = [...around.matchAll(LIBRARY_ID)].map((m) => m[0]).filter((id) => id.toLowerCase().includes(q))
+    const label = ids.find((id) => id !== g.id) ?? `${hit.before.slice(-24)}${hit.text}${hit.after.slice(0, 24)}`.trim()
+    if (!g.inside.some((x) => x.label === label)) g.inside.push({ label, hit })
+  }
+  return groups
+}
 
 /** How long typing settles before an all-pages search asks the server. */
 const CANVAS_FIND_DEBOUNCE_MS = 220
@@ -122,18 +175,30 @@ export function FindBar({
     )
   }, [page?.frames, query, matchCase])
   /* an answer for an older query is not shown while the new one is asked */
-  const remoteHits = scope === 'canvas' && remote?.q === query.trim() ? remote.hits : []
-  const listLength = scope === 'canvas' ? remoteHits.length : hits.length
+  const remoteHits = useMemo(
+    () => (scope === 'canvas' && remote?.q === query.trim() ? remote.hits : []),
+    [scope, remote, query],
+  )
+  /* all pages: one row per frame, stepped frame by frame */
+  const groups = useMemo(() => groupByFrame(remoteHits, query), [remoteHits, query])
+  const [open, setOpen] = useState<Set<string>>(() => new Set())
+  const [hovered, setHovered] = useState<string | null>(null)
+  const listLength = scope === 'canvas' ? groups.length : hits.length
   const active = listLength ? Math.min(cursor, listLength - 1) : -1
 
-  function goRemote(index: number) {
-    const hit = remoteHits[index]
-    if (!hit) return
-    setCursor(index)
+  function flyToHit(hit: CanvasFindHit) {
     const s = useStore.getState()
     s.select(hit.frameId)
     s.requestFlyTo(hit.frameId)
     if (hit.where === 'text') pickWhenLoaded(hit.frameId, query.trim(), hit.n, matchCase)
+  }
+
+  function goRemote(index: number) {
+    const group = groups[index]
+    if (!group) return
+    setCursor(index)
+    /* the frame's first readable match is picked; a name match just frames it */
+    flyToHit(group.hits.find((h) => h.where === 'text') ?? group.hits[0]!)
   }
 
   function go(index: number) {
@@ -197,7 +262,7 @@ export function FindBar({
       : listLength
         ? t('actions.findCount', {
             current: active + 1,
-            total: scope === 'canvas' ? (remote?.total ?? listLength) : listLength,
+            total: listLength,
           })
         : t('actions.findNone')
 
@@ -205,7 +270,10 @@ export function FindBar({
     <div
       role="search"
       aria-label={t('actions.findLabel')}
-      className="absolute z-40 flex w-[min(360px,calc(100vw-24px))] flex-col gap-1.5 rounded-panel bg-surface p-2 shadow-float"
+      className={cn(
+        'absolute z-40 flex flex-col gap-1.5 rounded-panel bg-surface p-2 shadow-float',
+        scope === 'canvas' ? 'w-[min(460px,calc(100vw-24px))]' : 'w-[min(360px,calc(100vw-24px))]',
+      )}
       style={{ top: 'calc(var(--chrome-top, 0px) + 10px)', right: 'calc(var(--chrome-right, 0px) + 10px)' }}
     >
       <div className="flex items-center gap-1">
@@ -294,30 +362,101 @@ export function FindBar({
           </Button>
         </div>
       )}
-      {scope === 'canvas' && remoteHits.length > 0 && (
-        <ul className="max-h-72 overflow-y-auto" aria-label={t('actions.findLabel')}>
-          {remoteHits.slice(0, 300).map((hit, i) => (
-            <li key={`${hit.frameId}:${hit.where}:${i}`}>
-              <Pressable
-                focus="none"
-                onClick={() => go(i)}
-                className={cn(
-                  'flex w-full flex-col items-start rounded-row px-2 py-1 text-left',
-                  i === active ? 'bg-paper-deep' : 'hover:bg-sub',
-                )}
-              >
-                <span className="w-full truncate text-caption text-ink-faint">
-                  {hit.pageName} · {hit.frameName}
-                </span>
-                <span className="w-full truncate text-body text-ink-soft">
-                  {hit.before}
-                  <mark className="rounded-tag bg-brand/20 text-ink">{hit.text}</mark>
-                  {hit.after}
-                </span>
-              </Pressable>
-            </li>
-          ))}
-        </ul>
+      {scope === 'canvas' && groups.length > 0 && (
+        <>
+          {/* the frame under the pointer, else the active one, shown big */}
+          <div className="relative h-44 flex-none overflow-hidden rounded-row bg-sub ring-1 ring-line-soft">
+            <FramePreview frameId={hovered ?? groups[Math.max(active, 0)]?.frameId} empty={null} />
+          </div>
+          <p className="px-1 text-caption text-ink-faint">
+            {t('actions.findFramesSummary', { frames: groups.length, total: remote?.total ?? remoteHits.length })}
+          </p>
+          <ul
+            className="max-h-80 overflow-y-auto"
+            aria-label={t('actions.findLabel')}
+            onMouseLeave={() => setHovered(null)}
+          >
+            {groups.slice(0, 300).map((g, i) => {
+              const newPage = i === 0 || groups[i - 1]!.pageId !== g.pageId
+              const expanded = open.has(g.frameId)
+              return (
+                <li key={g.frameId}>
+                  {newPage && (
+                    <p className="sticky top-0 z-10 bg-surface px-2 pt-2 pb-1 font-mono text-micro tracking-wide text-ink-faint uppercase">
+                      {g.pageName}
+                    </p>
+                  )}
+                  <div
+                    className={cn(
+                      'flex items-center gap-2 rounded-row px-1.5 py-1',
+                      i === active ? 'bg-paper-deep' : 'hover:bg-sub',
+                    )}
+                    onMouseEnter={() => setHovered(g.frameId)}
+                  >
+                    <Pressable
+                      focus="none"
+                      onClick={() => go(i)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      <span className="h-[30px] w-[46px] flex-none overflow-hidden rounded-tag bg-sub ring-1 ring-line-soft">
+                        <FramePreview frameId={g.frameId} empty={null} />
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate font-mono text-caption text-ink">{g.id ?? g.label}</span>
+                        {g.id && <span className="truncate text-caption text-ink-faint">{g.label}</span>}
+                      </span>
+                    </Pressable>
+                    <span className="flex-none font-mono text-caption text-ink-faint tabular-nums">
+                      {g.hits.length}
+                    </span>
+                    {g.inside.length > 0 ? (
+                      <IconButton
+                        size="sm"
+                        aria-label={t('actions.findShowInside')}
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setOpen((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(g.frameId)) next.delete(g.frameId)
+                            else next.add(g.frameId)
+                            return next
+                          })
+                        }
+                      >
+                        <ChevronRightIcon
+                          width={14}
+                          height={14}
+                          aria-hidden
+                          className={cn('transition-transform', expanded && 'rotate-90')}
+                        />
+                      </IconButton>
+                    ) : (
+                      <span className="size-7 flex-none" />
+                    )}
+                  </div>
+                  {expanded && (
+                    <ul className="pb-1 pl-[62px]">
+                      {g.inside.slice(0, 40).map((x) => (
+                        <li key={x.label}>
+                          <Pressable
+                            focus="none"
+                            onClick={() => {
+                              setCursor(i)
+                              flyToHit(x.hit)
+                            }}
+                            className="w-full truncate rounded-row px-1.5 py-0.5 text-left font-mono text-caption text-ink-soft hover:bg-sub"
+                          >
+                            {x.label}
+                          </Pressable>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </>
       )}
       {scope === 'page' && hits.length > 0 && (
         <ul className="max-h-56 overflow-y-auto" aria-label={t('actions.findLabel')}>

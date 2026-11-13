@@ -153,6 +153,8 @@ export const actions = {
   findNone: 'No results',
   findAllPages: 'Search every page of this canvas',
   findAllPagesShort: 'All',
+  findFramesSummary: '{frames} frames · {total} matches',
+  findShowInside: 'Show what matched inside',
   matchCase: 'Match case',
   previousMatch: 'Previous match',
   nextMatch: 'Next match',

@@ -153,6 +153,8 @@ export const actions: Catalog['actions'] = {
   findNone: 'Nenhum resultado',
   findAllPages: 'Buscar em todas as páginas deste canvas',
   findAllPagesShort: 'Tudo',
+  findFramesSummary: '{frames} frames · {total} resultados',
+  findShowInside: 'Mostrar o que foi encontrado dentro',
   matchCase: 'Diferenciar maiúsculas',
   previousMatch: 'Resultado anterior',
   nextMatch: 'Próximo resultado',

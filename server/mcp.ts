@@ -544,11 +544,13 @@ export function buildMcpServer(
       let total = 0
       let frames = 0
       for (const id of ids) {
-        const c = canvasFor(id, 'view')
-        if (!c) {
+        if (!canvasFor(id, 'view')) {
           if (canvas_id) return noCanvas(canvas_id)
           continue
         }
+        /* frame HTML is loaded per canvas on demand */
+        const c = await store.load(id)
+        if (!c) continue
         const r = findInCanvas(c, query, { matchCase: !!match_case })
         total += r.total
         frames += r.frames
