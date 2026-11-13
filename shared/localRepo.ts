@@ -4,9 +4,12 @@
  * read itself; the server only knows the link exists and shuttles requests
  * to the device over a long-poll. The agent's `repo_list` / `repo_read` /
  * `repo_search` tools and the canvas's link chip are the two ends of this
- * file. Caps and the denylist spec mirror `desktop/src-tauri/src/repo.rs`,
- * which enforces them natively — keep the two in step.
+ * file. `write_change` is the single write: it only creates a Stip change
+ * folder, after a native confirmation on the device. Caps and the denylist
+ * spec mirror `desktop/src-tauri/src/repo.rs`, which enforces them
+ * natively — keep the two in step.
  */
+import type { HandoffFile } from './handoff.ts'
 
 /** A `repo_list` answer is one bounded tree slice. */
 export const REPO_MAX_ENTRIES = 2000
@@ -23,6 +26,9 @@ export const REPO_MAX_PATH_CHARS = 500
 
 /** An unanswered read expires rather than queueing: reads need a live app. */
 export const REPO_REQUEST_TTL_MS = 60_000
+/** A write_change request waits longer: its native confirmation dialog can
+ *  sit on the Mac until someone answers it. */
+export const REPO_WRITE_TTL_MS = 10 * 60_000
 /** How long a poll call waits for work before answering empty. */
 export const REPO_POLL_MS = 20_000
 /** A device counts as online this long after its last poll. */
@@ -52,8 +58,9 @@ export const REPO_DENY_NAMES = [
   '*.tfvars',
 ] as const
 
-/** What a repo request asks the device to do. */
-export type RepoOp = 'list' | 'read' | 'search'
+/** What a repo request asks the device to do. `write_change` is the only
+ *  write — it creates a new `.workflow/changes/<id>/` folder, nothing else. */
+export type RepoOp = 'list' | 'read' | 'search' | 'write_change'
 
 /** The link as the server knows it — everything but the path it never sees. */
 export interface RepoLink {
@@ -91,6 +98,9 @@ export interface RepoRequest {
     regex?: boolean
     glob?: string
     limit?: number
+    /** `write_change`: the change id and its files (shared/handoff.ts) */
+    changeId?: string
+    files?: HandoffFile[]
   }
 }
 
@@ -143,5 +153,5 @@ export interface RepoSearchResult {
 }
 
 export function isRepoOp(value: unknown): value is RepoOp {
-  return value === 'list' || value === 'read' || value === 'search'
+  return value === 'list' || value === 'read' || value === 'search' || value === 'write_change'
 }
