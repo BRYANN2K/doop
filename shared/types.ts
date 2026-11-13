@@ -423,6 +423,9 @@ export interface AgentTask {
    *  handing the title to the chat agent. Absent on prompt cards. */
   kind?: RepoCardKind
   payload?: RepoCardPayload
+  /** board cards a chat plan queued: the library references the launcher
+   *  approved for this screen — the design agent opens them as its base */
+  references?: ChatPlanReference[]
   /** board cards: the connection and model the composer picked for this
    *  card; absent runs on the requester's Settings default */
   runner?: RunnerPick
@@ -545,6 +548,25 @@ export interface ActivityItem {
 
 /* ---- canvas chat ---- */
 
+/** A library frame a planned screen will reuse: a frame on one of the
+ *  canvases the asker designated as their reference library (in Settings,
+ *  stored by server/referenceLibrary.ts). The plan card shows it as a
+ *  thumbnail the humans approve along with the screens, and Go design
+ *  carries it onto the board card so the design agent builds from it. */
+export interface ChatPlanReference {
+  /** this reference's id inside the plan — the remove button and React
+   *  keys use it; minted as `canvasId:frameId` when the agent leaves it out */
+  libraryId: string
+  /** the library canvas the frame lives on */
+  canvasId: string
+  /** the frame to reuse — /i/<frameId>.jpg renders its thumbnail */
+  frameId: string
+  /** short name on the plan card ("OTP input sheet") */
+  label: string
+  /** why this screen builds on it */
+  why: string
+}
+
 /** One screen a chat plan proposes: the card Go design queues is built from
  *  this verbatim, so the fields stay close to what a card needs. */
 export interface ChatPlanScreen {
@@ -555,6 +577,8 @@ export interface ChatPlanScreen {
   outline: string
   /** repo paths, token names or components the design should reuse */
   reuse?: string[]
+  /** library frames the design builds on — approved with the plan */
+  references?: ChatPlanReference[]
 }
 
 /** A design plan the agent put into chat, waiting on a human's decision.

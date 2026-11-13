@@ -924,6 +924,16 @@ export const imagePrefs = pgTable('image_prefs', {
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
 })
 
+/** The canvases a user designated as their reference library (Settings →
+ *  Agent): the chat run's find_references searches only these, and a plan's
+ *  references must point at frames inside them. Resolved per asker like
+ *  repo_links — a plan is built from the requester's library. */
+export const referenceLibrary = pgTable('reference_library', {
+  userId: text('user_id').primaryKey(),
+  canvasIds: jsonb('canvas_ids').$type<string[]>().notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+})
+
 /** One app-actor installation per Linear workspace, billed to its installer. */
 export const linearInstallations = pgTable('linear_installations', {
   organizationId: text('organization_id').primaryKey(),

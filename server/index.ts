@@ -120,6 +120,7 @@ import {
 import { setStoredDefault } from './agentDefaults.ts'
 import { isRunnerProvider, parseRunnerPick } from '../shared/agentRunner.ts'
 import { findInCanvas } from './canvasFind.ts'
+import * as library from './referenceLibrary.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import { cleanChatPlan, isOpenPlan } from '../shared/chat.ts'
@@ -1423,6 +1424,32 @@ app.delete('/api/agent-keys/:id', async (req, res) => {
   if (!(await agentKeys.deleteAgentKey(req.user!.id, req.params.id)))
     return res.status(404).json({ error: 'agent key not found' })
   res.json({ ok: true })
+})
+
+/* ---- the reference library (Settings → Agent): the canvases the chat
+   agent searches with find_references, and the only canvases a plan's
+   references may point into. Per user, like the repo link. */
+
+app.get('/api/library', async (req, res) => {
+  res.json({ canvases: await library.libraryFor(req.user!.id) })
+})
+
+app.put('/api/library', async (req, res) => {
+  const ids: unknown = req.body?.canvasIds
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).map((id) => (typeof id === 'string' ? id.trim() : '')))]
+  if (!Array.isArray(ids) || wanted.some((id) => !id)) {
+    return res.status(400).json({ error: 'canvasIds must be a list of canvas ids' })
+  }
+  if (wanted.length > library.LIBRARY_MAX_CANVASES) {
+    return res.status(400).json({ error: `a library holds at most ${library.LIBRARY_MAX_CANVASES} canvases` })
+  }
+  /* only canvases the user can still open may be designated — the same set
+     find_references will be allowed to search */
+  const reachable = new Set(workspaces.canvasesFor(req.user!.id).map((meta) => meta.id))
+  const unknown = wanted.find((id) => !reachable.has(id))
+  if (unknown) return res.status(400).json({ error: `canvas ${unknown} is not yours to use as a library` })
+  await library.setLibraryCanvasIds(req.user!.id, wanted)
+  res.json({ canvases: await library.libraryFor(req.user!.id) })
 })
 
 app.get('/api/canvases', async (req, res) => {
@@ -2831,6 +2858,23 @@ app.patch('/api/chat/:messageId/plan', (req, res) => {
   if (!plan) return res.status(400).json({ error: 'not a plan' })
   const updated = actions.editChatPlan(message.id, plan)
   if (!updated) return res.status(409).json({ error: `plan is ${message.plan!.status}` })
+  res.json(updated)
+})
+
+/* Remove one library reference from one screen of an open plan — the
+   button on a plan-card thumbnail. Counts as a human edit: the plan turns
+   approved, and Go design never hands the dropped frame to a card. */
+app.delete('/api/chat/:messageId/plan/references', (req, res) => {
+  const message = requireChatPlan(req, res)
+  if (!message) return
+  if (!requireCanvas(req, res, message.canvasId, 'edit')) return
+  const screen = Number(req.body?.screen)
+  const libraryId = typeof req.body?.libraryId === 'string' ? req.body.libraryId : ''
+  if (!Number.isInteger(screen) || screen < 0 || !libraryId) {
+    return res.status(400).json({ error: 'screen index and libraryId required' })
+  }
+  const updated = actions.removeChatPlanReference(message.id, screen, libraryId)
+  if (!updated) return res.status(404).json({ error: 'reference not found or plan is closed' })
   res.json(updated)
 })
 

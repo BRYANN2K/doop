@@ -44,7 +44,14 @@ import {
   type TokenType,
 } from '../shared/designTokens.ts'
 import { emitCanvasEvent } from './events.ts'
-import { CHAT_LOG_CAP, MAX_CHAT_TEXT_CHARS, chatPlanCardTitle, chatThreadId, isOpenPlan } from '../shared/chat.ts'
+import {
+  CHAT_LOG_CAP,
+  MAX_CHAT_TEXT_CHARS,
+  chatPlanCardTitle,
+  chatThreadId,
+  cleanPlanReferences,
+  isOpenPlan,
+} from '../shared/chat.ts'
 import type {
   Actor,
   CanvasGuide,
@@ -1296,6 +1303,32 @@ export function editChatPlan(
   return m
 }
 
+/** Remove one approved reference from one screen of a plan — a human edit:
+ *  the plan is marked approved and stays launchable, and the dropped
+ *  reference never reaches the screen's card. */
+export function removeChatPlanReference(
+  messageId: string,
+  screenIndex: number,
+  libraryId: string,
+): ChatMessage | undefined {
+  const m = chatById.get(messageId)
+  if (!m?.plan || !isOpenPlan(m.plan)) return undefined
+  const screen = m.plan.screens[screenIndex]
+  const refs = screen?.references
+  if (!screen || !refs?.some((r) => r.libraryId === libraryId)) return undefined
+  const remaining = refs.filter((r) => r.libraryId !== libraryId)
+  m.plan = {
+    ...m.plan,
+    status: 'approved',
+    screens: m.plan.screens.map((s, i) =>
+      i === screenIndex ? { ...s, ...(remaining.length ? { references: remaining } : { references: undefined }) } : s,
+    ),
+  }
+  persist.saveChatMessage(m)
+  broadcast(m.canvasId, { type: 'chat', message: m })
+  return m
+}
+
 /** A new plan supersedes every still-open plan in its thread. */
 export function reviseChatPlans(canvasId: string, rootId: string, exceptId: string) {
   for (const m of chatThread(rootId)) {
@@ -1336,6 +1369,7 @@ export function launchChatPlan(
       launcher.userId,
       undefined,
       message.runner,
+      screen.references,
     )
     if (card) cards.push(card)
   }
@@ -1466,12 +1500,16 @@ export function addQueuedCard(
   fromUserId?: string,
   scope?: unknown,
   runner?: unknown,
+  references?: unknown,
 ): AgentTask | undefined {
   const clean = title.trim().slice(0, MAX_CARD_CHARS)
   if (!clean || !store.getCanvas(canvasId)) return undefined
   const pipeline = normalizePipeline(agents)
   const target = normalizeScope(canvasId, scope)
   const pick = parseRunnerPick(runner)
+  /* the plan's approved library references, cleaned — the card carries
+     them so the design run opens them as this screen's base */
+  const libRefs = cleanPlanReferences(references)
   /* reference-image frame ids: only frames that actually live on this canvas */
   const refs = (Array.isArray(attachments) ? attachments : [])
     .filter((a): a is string => typeof a === 'string')
@@ -1486,6 +1524,7 @@ export function addQueuedCard(
       pipelineOf(t).join(',') === pipeline.join(',') &&
       (t.attachments ?? []).join(',') === refs.join(',') &&
       JSON.stringify(t.scope ?? null) === JSON.stringify(target ?? null) &&
+      JSON.stringify(t.references ?? null) === JSON.stringify(libRefs.length ? libRefs : null) &&
       runnerKey(t.runner) === runnerKey(pick),
   )
   if (duplicate) return duplicate
@@ -1500,6 +1539,7 @@ export function addQueuedCard(
     pipeline,
     stage: 0,
     ...(refs.length > 0 ? { attachments: refs } : {}),
+    ...(libRefs.length ? { references: libRefs } : {}),
     ...(target ? { scope: target } : {}),
     ...(pick ? { runner: pick } : {}),
   }

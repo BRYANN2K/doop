@@ -53,8 +53,19 @@ import {
   inspirationSearchEnabled,
   searchInspiration,
 } from './inspiration.ts'
-import type { Actor, AgentTask, Canvas, ChatMessage, ChatPlan, ElementComment, Frame } from '../shared/types.ts'
+import type {
+  Actor,
+  AgentTask,
+  Canvas,
+  ChatMessage,
+  ChatPlan,
+  ChatPlanScreen,
+  ElementComment,
+  Frame,
+} from '../shared/types.ts'
 import { CHAT_HISTORY_LINES, chatThreadId, cleanChatPlan } from '../shared/chat.ts'
+import { findInCanvas } from './canvasFind.ts'
+import * as library from './referenceLibrary.ts'
 import { canvasPages, framePageId, MAX_PAGE_NAME, pageFrames, samePages } from '../shared/pages.ts'
 import { addPage, pageList, parsePageList, savePages, updateFrameMeta } from './pageTools.ts'
 import { isCanvasComment, isFrameComment } from '../shared/comments.ts'
@@ -258,6 +269,10 @@ interface RunState {
   /** thread roots the agent already posted into (a plan, a question) — the
    *  settle does not double-post the closing words there */
   chatPostedThreads?: Set<string>
+  /** the asker's reference-library canvases (Settings → Agent), resolved
+   *  like the repo link: find_references searches only these, and every
+   *  reference a plan names must point inside them */
+  libraryCanvases?: { id: string; name: string }[]
   /** propose_plan or ask_in_chat landed: the chat turn is done */
   chatDone?: boolean
   /** a plan card already went out this run — a second call is refused */
@@ -590,8 +605,15 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
                     `Call screenshot_frame on each BEFORE designing and build from what you see. ` +
                     `They are source material — leave them as they are and deliver in a separate frame.`
                   : ''
+              const libRefs = (c.references ?? [])
+                .map((r) => `"${r.label}" (canvas_id=${r.canvasId}, frame_id=${r.frameId})`)
+                .join(', ')
+              const libBlock = libRefs
+                ? `\n  Library references the humans approved with the plan — this screen's design base, not optional inspiration: ${libRefs}. ` +
+                  `Open each BEFORE designing (get_frame_html or screenshot_frame with its canvas_id) and build from what is actually there.`
+                : ''
               const scoped = describeScope(c.scope)
-              return `- from ${c.queuedBy}: "${c.status}"${route}${scoped}${refs}`
+              return `- from ${c.queuedBy}: "${c.status}"${route}${scoped}${refs}${libBlock}`
             })
             .join('\n'),
       )
@@ -1076,7 +1098,7 @@ const CHAT_SYSTEM = `You are a resident agent of the Doop canvas — a multiplay
 Rules:
 - You cannot change the canvas from chat: only read tools exist here. Look before you speak — inspect_frame, get_frame_html, screenshot_frame, get_tokens, get_prototype, get_reference, view_website, search_inspiration, and the repo_* tools when the asker linked a project.
 - Answer plain questions in your final message — it is posted to the thread. Keep it short: a chat bubble, not a document.
-- When the ask is design work — new screens, a redesign, a flow — investigate first, then end with ONE propose_plan call. The plan must stand on its own: what it is for, the screens to create with real sizes and what each shows, and the canvas or project pieces to reuse (token names, component names, file paths). Anything genuinely undecided goes into open_questions — the humans answer in chat before pressing Go design.
+- When the ask is design work — new screens, a redesign, a flow — investigate first, then end with ONE propose_plan call. The plan must stand on its own: what it is for, the screens to create with real sizes and what each shows, and the canvas or project pieces to reuse (token names, component names, file paths). When a reference library is listed in context, search it with find_references before planning: every screen names the library references it will reuse (canvas_id, frame_id, a label and why), and proposing none should mean the library genuinely had nothing close — an approved library frame wins over improvising one. Anything genuinely undecided goes into open_questions — the humans answer in chat before pressing Go design.
 - When you cannot produce a plan or an answer without a decision only a human can make, ask_in_chat one focused question and stop.
 - Never describe design work as done — nothing is designed until an editor presses Go design.`
 
@@ -1104,6 +1126,21 @@ const CHAT_PLAN_TOOLS: Anthropic.Tool[] = [
                 type: 'array',
                 items: { type: 'string' },
                 description: 'Canvas components/tokens or project file paths this screen builds from',
+              },
+              references: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    canvas_id: { type: 'string', description: 'A canvas of the asker’s reference library' },
+                    frame_id: { type: 'string', description: 'The library frame this screen builds on' },
+                    label: { type: 'string', description: 'Short name on the plan card, e.g. "OTP input"' },
+                    why: { type: 'string', description: 'Why this screen reuses it, in a few words' },
+                  },
+                  required: ['canvas_id', 'frame_id', 'label', 'why'],
+                },
+                description:
+                  'Library frames this screen builds on — only ids find_references returned; the humans approve them along with the plan',
               },
             },
             required: ['name', 'width', 'height', 'outline'],
@@ -1138,13 +1175,36 @@ const CHAT_PLAN_TOOLS: Anthropic.Tool[] = [
   },
 ]
 
+/* Searching the asker's reference library — offered only when they
+   designated library canvases in Settings (runChat appends the tool; the
+   search never leaves the library, so a plan cannot cite a frame the
+   asker did not mark as source material). */
+export const LIBRARY_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'find_references',
+    description:
+      "Search ONLY the asker's reference-library canvases for screens and elements to reuse — frame names, the text a person reads, and string literals in scripts (library sheets often render items from a JS array, so ids like cp.vui-otp-input live there). Call it before propose_plan: each screen of the plan should name the library references it will reuse. Results carry the canvas_id/frame_id propose_plan takes, plus a thumbnail and a link the plan card shows.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The term to find, e.g. "otp", "pricing", "hero"' },
+        match_case: { type: 'boolean' },
+        limit: { type: 'number', description: 'Max hits returned (default 30)' },
+      },
+      required: ['query'],
+    },
+  },
+]
+
 /** The tool list a chat run sees: read tools + the plan tools + repo_* when
- *  the asker has a project linked. Exported so tests can pin the contract. */
-export function chatTools(repoLinked: boolean): Anthropic.Tool[] {
+ *  the asker has a project linked + find_references when they designated a
+ *  library. Exported so tests can pin the contract. */
+export function chatTools(repoLinked: boolean, libraryLinked = false): Anthropic.Tool[] {
   return [
     ...TOOLS.filter((tool) => CHAT_READ_TOOL_NAMES.has(tool.name)),
     ...CHAT_PLAN_TOOLS,
     ...(repoLinked ? REPO_TOOLS : []),
+    ...(libraryLinked ? LIBRARY_TOOLS : []),
   ]
 }
 
@@ -1172,6 +1232,26 @@ function postAgentChat(
        runs the screens on the model the person picked */
     ...(ref?.runner ? { runner: ref.runner } : {}),
   })
+}
+
+/** Every reference a plan names must point at a real frame inside the
+ *  asker's library canvases — propose_plan may not invent references
+ *  elsewhere, and a plan without a library may not carry any. */
+async function planReferenceError(screens: ChatPlanScreen[], runState: RunState): Promise<string | undefined> {
+  const refs = screens.flatMap((s) => (s.references ?? []).map((r) => ({ ...r, screen: s.name })))
+  if (!refs.length) return undefined
+  const libraryIds = new Set((runState.libraryCanvases ?? []).map((c) => c.id))
+  for (const ref of refs) {
+    if (!libraryIds.has(ref.canvasId)) {
+      return `reference "${ref.label}" on "${ref.screen}" points at canvas ${ref.canvasId}, which is not in the asker's reference library — only frames find_references returned may be named`
+    }
+    const canvas = await store.load(ref.canvasId)
+    const frame = canvas?.frames.find((f) => f.id === ref.frameId)
+    if (!frame || frame.hidden || frame.demo) {
+      return `reference "${ref.label}" on "${ref.screen}" names frame ${ref.frameId}, which does not exist on canvas ${ref.canvasId} — check it with find_references`
+    }
+  }
+  return undefined
 }
 
 /** The plan-only tool dispatch: read tools go to the shared executor, the
@@ -1202,6 +1282,8 @@ export async function execChatTool(
       if (!clean) {
         return fail('propose_plan needs a summary and at least one screen with name, width, height and outline')
       }
+      const refError = await planReferenceError(clean.screens, runState)
+      if (refError) return fail(refError)
       const message = postAgentChat(canvasId, actor, chatAskFor(runState, input.message_id), clean.summary, {
         ...clean,
         status: 'proposed',
@@ -1223,6 +1305,40 @@ export async function execChatTool(
       runState.chatDone = true
       ;(runState.chatPostedThreads ??= new Set()).add(chatThreadId(message))
       return ok('question posted — a human answers in chat; your turn is done')
+    }
+    case 'find_references': {
+      const canvases = runState.libraryCanvases ?? []
+      if (!canvases.length) {
+        return fail('the asker has no reference library — they designate one in Settings → Agent')
+      }
+      const query = String(input.query ?? '').trim()
+      if (!query) return fail('query required')
+      const limit = Math.max(1, Math.min(Number(input.limit) || 30, 100))
+      const hits: Record<string, unknown>[] = []
+      let total = 0
+      let frames = 0
+      for (const lib of canvases) {
+        const c = await store.load(lib.id)
+        if (!c) continue
+        const r = findInCanvas(c, query, { matchCase: input.match_case === true })
+        total += r.total
+        frames += r.frames
+        for (const h of r.hits) {
+          if (hits.length >= limit) break
+          hits.push({
+            canvas_id: c.id,
+            canvas_name: c.name,
+            frame_id: h.frameId,
+            frame_name: h.frameName,
+            page_name: h.pageName,
+            where: h.where,
+            snippet: `${h.before}[${h.text}]${h.after}`,
+            thumbnail: `/i/${h.frameId}.jpg?preview`,
+            url: `/c/${c.id}?frame=${h.frameId}`,
+          })
+        }
+      }
+      return ok(JSON.stringify({ query, total, frames, returned: hits.length, hits }))
     }
     default:
       if (runState.blockedWebsiteAccess) return fail(runState.blockedWebsiteAccess)
@@ -1299,6 +1415,9 @@ async function runChat(
   const canvas = store.getCanvas(canvasId)
   const repoUserId = payer || canvas?.ownerId
   const repoLink = repoUserId ? await linkFor(repoUserId, canvasId).catch(() => undefined) : undefined
+  /* the asker's reference library, resolved like their repo link: the run
+     searches only these canvases, and a plan's references must point inside */
+  const libraryCanvases = repoUserId ? await library.libraryFor(repoUserId).catch(() => []) : []
   const runState: RunState = {
     mutatedFrames: new Set(),
     sourceFrames: new Set(),
@@ -1315,6 +1434,7 @@ async function runChat(
     arrangeWrites: 0,
     chatAsks: asks,
     chatPostedThreads: new Set(),
+    ...(libraryCanvases.length ? { libraryCanvases } : {}),
   }
   const heartbeat = setInterval(() => actions.heartbeatAgent(canvasId, actor), 15_000)
   const abort = new AbortController()
@@ -1379,14 +1499,30 @@ async function runChat(
           },
         ]
       : []
+    const libraryBlock = libraryCanvases.length
+      ? [
+          {
+            text:
+              `# Reference library\nThe asker marked ${libraryCanvases
+                .map((c) => `"${c.name}" (${c.id})`)
+                .join(', ')} as their design library — approved screens and components to build from. ` +
+              `Before propose_plan, search it with find_references ("otp", "pricing", a component id); ` +
+              `each screen of the plan names the references it will reuse (canvas_id, frame_id, a label ` +
+              `and why). The humans approve the references along with the plan, and Go design hands them ` +
+              `to the design agent as the base to work from — prefer a library frame that fits over ` +
+              `improvising one from nothing.`,
+          },
+        ]
+      : []
     const system = [
       { text: `${CHAT_SYSTEM}\n\nYour role on this canvas is ${role.name}. ${role.brief}`, cache: true },
       ...guidelinesBlock,
       ...tokensBlock,
       ...componentsBlock,
       ...repoBlock,
+      ...libraryBlock,
     ]
-    const runTools = chatTools(!!repoLink)
+    const runTools = chatTools(!!repoLink, libraryCanvases.length > 0)
 
     if (model.runHarness) {
       const result = await model.runHarness({
@@ -1619,7 +1755,14 @@ const TOOLS: Anthropic.Tool[] = [
       'Inspect the rendered page without relying on class names. Returns a compact semantic element outline, visible text, geometry, computed colors, typography, radii, shadows, and CSS variables. Use this before working with large frames and for cross-frame visual references.',
     input_schema: {
       type: 'object',
-      properties: { frame_id: { type: 'string' } },
+      properties: {
+        frame_id: { type: 'string' },
+        canvas_id: {
+          type: 'string',
+          description:
+            'The canvas the frame lives on; omit for this canvas. Another canvas is readable only when the requester can open it — a plan card names its approved library references this way.',
+        },
+      },
       required: ['frame_id'],
     },
   },
@@ -1631,6 +1774,11 @@ const TOOLS: Anthropic.Tool[] = [
       type: 'object',
       properties: {
         frame_id: { type: 'string' },
+        canvas_id: {
+          type: 'string',
+          description:
+            'The canvas the frame lives on; omit for this canvas. Another canvas is readable only when the requester can open it — a plan card names its approved library references this way.',
+        },
         query: {
           type: 'string',
           description: 'Optional literal text to find in the HTML; returns bounded context around up to five matches',
@@ -2114,7 +2262,14 @@ const TOOLS: Anthropic.Tool[] = [
       'Render a frame and SEE it as an image. Call this after every visual change to verify the feedback is actually addressed.',
     input_schema: {
       type: 'object',
-      properties: { frame_id: { type: 'string' } },
+      properties: {
+        frame_id: { type: 'string' },
+        canvas_id: {
+          type: 'string',
+          description:
+            'The canvas the frame lives on; omit for this canvas. Another canvas is readable only when the requester can open it — a plan card names its approved library references this way.',
+        },
+      },
       required: ['frame_id'],
     },
   },
@@ -2260,6 +2415,27 @@ async function frameImageBlocks(
   return blocks
 }
 
+/** The frame a read tool may look at: on the run's own canvas as usual, or
+ *  on another canvas the requester can open — the library references a plan
+ *  card approved live elsewhere. Returns the frame, or the refusal line. */
+async function readableFrame(
+  frameId: unknown,
+  canvasId: string,
+  runState: RunState,
+  canvasIdArg: unknown,
+): Promise<Frame | string> {
+  const target = typeof canvasIdArg === 'string' && canvasIdArg.trim() ? canvasIdArg.trim() : canvasId
+  if (target !== canvasId && (!runState.payerId || !canReadCanvas(runState.payerId, target))) {
+    return `canvas ${target} is not one the requester can read`
+  }
+  const canvas = target === canvasId ? store.getCanvas(canvasId) : await store.load(target)
+  const frame = canvas?.frames.find((f) => f.id === frameId)
+  if (!frame) {
+    return target === canvasId ? 'frame not found on this canvas' : `frame ${frameId} not found on canvas ${target}`
+  }
+  return frame
+}
+
 /** Runs one tool call of the resident's loop. Exported for tests. */
 export async function execTool(
   block: Anthropic.ToolUseBlockParam,
@@ -2317,8 +2493,8 @@ export async function execTool(
         )
       }
       case 'inspect_frame': {
-        const f = store.getFrame(input.frame_id)
-        if (!f || f.canvasId !== canvasId) return fail('frame not found on this canvas')
+        const f = await readableFrame(input.frame_id, canvasId, runState, input.canvas_id)
+        if (typeof f === 'string') return fail(f)
         const inspection = await inspectFrame(f)
         return ok(
           JSON.stringify({
@@ -2329,8 +2505,8 @@ export async function execTool(
         )
       }
       case 'get_frame_html': {
-        const f = store.getFrame(input.frame_id)
-        if (!f || f.canvasId !== canvasId) return fail('frame not found on this canvas')
+        const f = await readableFrame(input.frame_id, canvasId, runState, input.canvas_id)
+        if (typeof f === 'string') return fail(f)
         if (typeof f.html !== 'string') return fail('frame HTML is unavailable; retry after the frame reloads')
         const raw = block.input as { query?: string; offset?: number; limit?: number }
         const approval = `Approval: ${JSON.stringify(f.approval ?? { status: 'draft' })}`
@@ -2927,8 +3103,8 @@ export async function execTool(
         return result.ok ? ok(JSON.stringify({ pages: result.pages })) : fail(result.error)
       }
       case 'screenshot_frame': {
-        const f = store.getFrame(input.frame_id)
-        if (!f || f.canvasId !== canvasId) return fail('frame not found on this canvas')
+        const f = await readableFrame(input.frame_id, canvasId, runState, input.canvas_id)
+        if (typeof f === 'string') return fail(f)
         /* a text-only model cannot see the render — skip the (paid, slow)
            screenshot entirely and point it at the textual surfaces, while
            keeping the verified-frames bookkeeping coherent */
