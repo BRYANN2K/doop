@@ -34,6 +34,7 @@ import { roleAllows, type CanvasRole } from '../shared/canvasRole.ts'
 import { isAgentKeySecret, verifyAgentKey } from './agentKeys.ts'
 import * as workspaces from './workspaces.ts'
 import { auth, getUserName, isBanned } from './auth.ts'
+import { compareFrameWithUrl } from './drift.ts'
 import { capture, captureThrottled } from './analytics.ts'
 import { renderFrame } from './screenshot.ts'
 import { imagesForFrames } from './assets.ts'
@@ -2111,6 +2112,68 @@ export function buildMcpServer(
       } catch (e) {
         return err(
           websiteAccessErrorMessage(e, 'connected-agent') ?? (e instanceof Error ? e.message : 'webpage import failed'),
+        )
+      }
+    },
+  )
+
+  server.registerTool(
+    'compare_with_url',
+    {
+      title: 'Compare a frame with a shipped URL',
+      _meta: previewToolMeta('Capturing the shipped page…', 'Comparison done'),
+      description:
+        'Drift review: capture the live page at a frame\'s width, place it beside the frame as a "Shipped" image frame, and score how far the pixels drifted (0 = identical). Use to check whether what shipped still matches the approved design. Public http(s) URLs render on the server; localhost and private URLs are fetched through the connecting user\'s doop desktop app — it must be open. After the compare, list the gaps by posting them with post_comment, or ask the human to run Analyze the gaps from the frame menu.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      inputSchema: {
+        frame_id: z.string().describe('The designed frame to compare against'),
+        url: z.string().describe('The shipped page URL — a deploy preview or production'),
+        agent_name: agentName,
+      },
+    },
+    async ({ frame_id, url, agent_name }) => {
+      const frame = frameFor(frame_id, 'edit')
+      if (!frame) return noFrame(frame_id)
+      if (!ownerId) return err('this connection is not signed in to a Doop account')
+      if (!url.trim() || url.length > 2048) return err('a url is required')
+      const now = Date.now()
+      const limitKey = `drift:${ownerId}`
+      const hits = (importHits.get(limitKey) ?? []).filter((t) => now - t < 60_000)
+      if (hits.length >= IMPORTS_PER_MIN) return err('drift comparison rate limit — wait a minute')
+      hits.push(now)
+      importHits.set(limitKey, hits)
+      const actor = actorFrom(agent_name)
+      try {
+        const { comparison, shipped, designPng, shippedPng } = await compareFrameWithUrl({
+          frame,
+          url: url.trim(),
+          actor,
+          userId: ownerId,
+          source: 'mcp',
+        })
+        const content: Array<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> = []
+        if (designPng) {
+          content.push({ type: 'image' as const, data: designPng.toString('base64'), mimeType: 'image/png' })
+          content.push({ type: 'text' as const, text: `↑ the design, frame ${frame.id} (“${frame.name}”)` })
+        }
+        if (shippedPng)
+          content.push({ type: 'image' as const, data: shippedPng.toString('base64'), mimeType: 'image/png' })
+        content.push({
+          type: 'text' as const,
+          text:
+            `↑ what shipped at ${comparison.finalUrl ?? url}, now frame ${shipped.id} (“${shipped.name}”), ` +
+            `placed beside the design. ` +
+            JSON.stringify({
+              ok: true,
+              comparison,
+              score: comparison.score !== undefined ? `${comparison.score}% of pixels differ` : 'not computed',
+              shipped_frame: frameSummary(shipped),
+            }),
+        })
+        return withStatusNudge(withFeedback({ content }, frame.canvasId, actor), frame.canvasId, actor)
+      } catch (e) {
+        return err(
+          websiteAccessErrorMessage(e, 'connected-agent') ?? (e instanceof Error ? e.message : 'the comparison failed'),
         )
       }
     },

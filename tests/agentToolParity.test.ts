@@ -35,6 +35,7 @@ const BY_CONTEXT = [
 const MISSING = [
   'get_canvas',
   'delete_frame',
+  'compare_with_url', // a drift review is queued as a drift card (Analyze the gaps); the resident's part is post_drift_finding
   'list_frame_versions',
   'restore_frame_version',
   'set_page_background',
