@@ -1,0 +1,26 @@
+/** The "Ready for dev → Stip" handoff: the modal that previews the drafted
+ *  Stip change pack and sends it to the linked local project. */
+export const handoff = {
+  action: 'Ready for dev → Stip',
+  actionTitle: 'Draft a Stip change pack for the linked project',
+  eyebrow: 'Stip handoff',
+  title: 'Hand off to the coding agent',
+  lede: 'A Stip change pack for {dir} — {count} files, every one created new.',
+  ledeRepo: 'Destination: {repo}.',
+  building: 'Drafting the pack…',
+  buildFailed: 'Could not draft the handoff pack',
+  tabSpec: 'Spec',
+  tabProposal: 'Proposal',
+  tabTasks: 'Tasks',
+  draftedByAgent: 'Criteria drafted by {model}',
+  draftedByTemplate: 'Template criteria — review them',
+  specNeedsAc: 'The spec needs at least one “- AC-n:” criterion',
+  write: 'Write to repo',
+  writeTitle: 'Send the pack to the desktop app — it asks before creating the files',
+  writing: 'Writing…',
+  writeFailed: 'The write did not go through',
+  cancelled: 'Write cancelled in the desktop app.',
+  notWritable: 'The linked project is not reachable from this device',
+  notWritableHint: 'Open the doop desktop app on the machine that holds the linked project, then try again.',
+  done: 'Written to {dir} in {repo}. The change is ready for Stip validation.',
+} as const

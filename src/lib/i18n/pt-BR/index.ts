@@ -22,6 +22,7 @@ import { admin } from './admin'
 import { ui } from './ui'
 import { components } from './components'
 import { actions } from './actions'
+import { handoff } from './handoff'
 
 export const ptBR: Catalog = {
   common,
@@ -47,4 +48,5 @@ export const ptBR: Catalog = {
   ui,
   components,
   actions,
+  handoff,
 }
