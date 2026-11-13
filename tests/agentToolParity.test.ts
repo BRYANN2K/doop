@@ -41,6 +41,7 @@ const MISSING = [
   'export_frame',
   'upload_asset',
   'find_in_canvas',
+  'create_live_frame',
   'list_linear_issues', // integration tools, registered by their connections
   'get_linear_issue',
   'create_handoff', // the ready-for-dev pack lives behind the UI's write flow

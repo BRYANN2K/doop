@@ -52,6 +52,7 @@ mod claude;
 mod claude_extension;
 mod codex;
 mod fonts;
+mod live;
 mod repo;
 mod server;
 mod updates;
@@ -318,6 +319,7 @@ fn main() {
     let builder = builder
         .manage(claude::ClaudeState::default())
         .manage(fonts::LocalFonts::default())
+        .manage(live::LiveState::default())
         .manage(app_menu::AppMenu::default())
         .invoke_handler(tauri::generate_handler![
             claude::claude_status,
@@ -339,6 +341,8 @@ fn main() {
             repo::repo_read,
             repo::repo_search,
             repo::repo_write_change,
+            live::live_snapshot,
+            live::live_snapshot_done,
             server::server_status,
             server::server_choose,
             view_menu::view_menu_state,
@@ -429,7 +433,7 @@ fn main() {
             // (traffic-light inset arrived with the overlay title bar, 0.1.2)
             // and the platform tells it which window framing it lives under.
             let desktop_marker = format!(
-                "window.__DOOP_DESKTOP__ = '{}'; window.__DOOP_DESKTOP_PLATFORM__ = '{}'; window.__DOOP_CLAUDE_CLI__ = true; window.__DOOP_CLAUDE_INSTALL__ = true; window.__DOOP_CLAUDE_CHOOSE__ = true; window.__DOOP_CLAUDE_EXTENSION__ = {}; window.__DOOP_CODEX_SETUP__ = true; window.__DOOP_VIEW_MENU__ = true; window.__DOOP_APP_MENU__ = {}; window.__DOOP_LOCAL_FONTS__ = true; window.__DOOP_LOCAL_REPO__ = true; window.__DOOP_UPDATE_CARD__ = true; window.__DOOP_SERVER_CHOOSE__ = true;",
+                "window.__DOOP_DESKTOP__ = '{}'; window.__DOOP_DESKTOP_PLATFORM__ = '{}'; window.__DOOP_CLAUDE_CLI__ = true; window.__DOOP_CLAUDE_INSTALL__ = true; window.__DOOP_CLAUDE_CHOOSE__ = true; window.__DOOP_CLAUDE_EXTENSION__ = {}; window.__DOOP_CODEX_SETUP__ = true; window.__DOOP_VIEW_MENU__ = true; window.__DOOP_APP_MENU__ = {}; window.__DOOP_LOCAL_FONTS__ = true; window.__DOOP_LOCAL_REPO__ = true; window.__DOOP_LIVE_SNAPSHOT__ = true; window.__DOOP_UPDATE_CARD__ = true; window.__DOOP_SERVER_CHOOSE__ = true;",
                 app.package_info().version,
                 std::env::consts::OS,
                 cfg!(any(target_os = "macos", target_os = "windows")),

@@ -199,6 +199,20 @@ export const canvas: Catalog['canvas'] = {
   errNoPagesReason: 'Nenhuma página pôde ser importada — {reason}',
   errWebsiteImportFailed: 'a importação do site falhou',
 
+  /* import: live frame */
+  liveFrameTitle: 'Frame ao vivo (servidor de dev)',
+  liveFrameLede:
+    'Aponte um frame para uma página que seu servidor de dev está rodando — ele fica ao vivo ao lado dos mockups, no app de desktop.',
+  liveFrameUrl: 'URL do servidor de dev',
+  liveFrameUrlInvalid: 'Somente http(s) em localhost, ou 127.x.x.x — ex.: http://localhost:4321/contact',
+  liveFrameWidth: 'Largura',
+  liveFrameHeight: 'Altura',
+  liveFrameNote:
+    'A página renderiza ao vivo somente no app de desktop do Doop; em todo o resto o frame mostra um placeholder.',
+  liveFrameCreate: 'Criar frame ao vivo',
+  liveFrameCreating: 'Adicionando frame ao vivo…',
+  liveFrameFailed: 'Não foi possível adicionar o frame ao vivo',
+
   syncTitle: 'Sincronizar um app ao vivo',
   syncForbidden: 'Chaves de sincronização são para membros do canvas — peça acesso permanente ao dono.',
   syncLede:

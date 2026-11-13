@@ -206,6 +206,19 @@ export const canvas = {
   errNoPagesReason: 'No pages could be imported — {reason}',
   errWebsiteImportFailed: 'website import failed',
 
+  /* import: live frame */
+  liveFrameTitle: 'Live frame (dev server)',
+  liveFrameLede:
+    'Point a frame at a page your dev server is running — it stays live next to your mockups, in the desktop app.',
+  liveFrameUrl: 'Dev-server URL',
+  liveFrameUrlInvalid: 'Only http(s) on localhost, or 127.x.x.x — e.g. http://localhost:4321/contact',
+  liveFrameWidth: 'Width',
+  liveFrameHeight: 'Height',
+  liveFrameNote: 'The page renders live in the Doop desktop app only; everywhere else the frame shows a placeholder.',
+  liveFrameCreate: 'Create live frame',
+  liveFrameCreating: 'Adding live frame…',
+  liveFrameFailed: 'Couldn’t add the live frame',
+
   /* import: live-app sync */
   syncTitle: 'Sync a live app',
   syncForbidden: 'Sync keys are for canvas members — ask the owner for durable access.',

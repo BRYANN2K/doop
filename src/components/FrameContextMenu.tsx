@@ -9,6 +9,9 @@ import { isStackLocked, setFramesHidden, setFramesLocked } from '../lib/layerEdi
 import { canEditOpenCanvas, useStore } from '../lib/store'
 import { setFramesApproval } from '../lib/frameApproval'
 import { useFrameSaves } from '../lib/frameSaves'
+import { liveFrameUrl } from '../../shared/liveFrame'
+import { canRenderLiveFrame, hasLiveSnapshot, reloadLiveFrame, snapshotLiveFrame } from '../lib/liveFrame'
+import { openExternal } from '../lib/desktop'
 import { MOD_KEY } from '../lib/keys'
 import { t as translate, useT } from '../lib/i18n'
 import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from './ui/context-menu'
@@ -86,6 +89,20 @@ export function FrameContextMenu({
       setSavingApproval(false)
     }
   }
+  const liveUrl = liveFrameUrl(frame.html)
+  const [snapshotBusy, setSnapshotBusy] = useState(false)
+  async function snapshotLive() {
+    setSnapshotBusy(true)
+    const notify = useStore.getState().pushNotice
+    try {
+      const snap = await snapshotLiveFrame(frame)
+      notify(t('stage.liveSnapshotDone', { name: snap.name }))
+    } catch (err) {
+      notify(errorMessage(err, t('stage.liveSnapshotFailed')))
+    } finally {
+      setSnapshotBusy(false)
+    }
+  }
   return (
     <>
       <ContextMenuContent
@@ -159,6 +176,22 @@ export function FrameContextMenu({
         <ContextMenuItem onSelect={() => void copyImageUrl(frame)}>{t('stage.copyImageUrl')}</ContextMenuItem>
         <ContextMenuItem onSelect={() => setExportFrames(groupFrames())}>{t('stage.exportEllipsis')}</ContextMenuItem>
         <ContextMenuItem onSelect={() => setHistoryOpen(true)}>{t('stage.versionHistory')}</ContextMenuItem>
+        {liveUrl && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem disabled={!canRenderLiveFrame()} onSelect={() => reloadLiveFrame(frame.id)}>
+              {t('stage.liveReload')}
+            </ContextMenuItem>
+            {hasLiveSnapshot() && (
+              <ContextMenuItem disabled={snapshotBusy || !canRenderLiveFrame()} onSelect={() => void snapshotLive()}>
+                {snapshotBusy ? t('stage.liveSnapshotting') : t('stage.liveSnapshot')}
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem onSelect={() => (openExternal(liveUrl) ? undefined : window.open(liveUrl, '_blank'))}>
+              {t('stage.liveOpenBrowser')}
+            </ContextMenuItem>
+          </>
+        )}
         {!readOnly && (
           <>
             <ContextMenuSeparator />

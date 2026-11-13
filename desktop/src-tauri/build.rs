@@ -29,6 +29,8 @@ fn main() {
             "repo_read",
             "repo_search",
             "repo_write_change",
+            "live_snapshot",
+            "live_snapshot_done",
             "server_status",
             "server_choose",
             "view_menu_state",

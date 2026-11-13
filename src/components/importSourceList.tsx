@@ -23,6 +23,12 @@ export function importSources(t: Translate = translate): ImportSource[] {
       icon: <AppIcon brand="live-app" />,
     },
     {
+      id: 'live',
+      title: t('panels.importLiveFrame'),
+      blurb: t('panels.importLiveFrameBlurb'),
+      icon: <AppIcon brand="live-frame" />,
+    },
+    {
       id: 'github',
       title: t('panels.importGithub'),
       blurb: t('panels.importGithubBlurb'),

@@ -5,7 +5,12 @@ import { buildMcpServer } from '../server/mcp.ts'
 import { FRAME_PREVIEW_URI } from '../server/chatgptApp.ts'
 import packageJson from '../package.json' with { type: 'json' }
 
-vi.mock('../server/db/persist.ts', () => ({ saveCanvas: () => {}, saveFrame: () => {}, saveActivity: () => {} }))
+vi.mock('../server/db/persist.ts', () => ({
+  saveCanvas: () => {},
+  saveFrame: () => {},
+  saveActivity: () => {},
+  saveTask: () => {},
+}))
 
 interface ToolInputSchema {
   properties?: Record<string, unknown>
@@ -417,6 +422,47 @@ it('update_frame normalizes and clears rotation while retaining page validation'
     expect(straight.isError).not.toBe(true)
     expect(body(straight).frame).not.toHaveProperty('rotation')
     expect(frame).toHaveProperty('rotation', undefined)
+  } finally {
+    await close()
+  }
+})
+
+it('create_live_frame stores a live frame for loopback URLs and refuses the rest', async () => {
+  const canvasId = 'mcp-live-frame'
+  const { client, close, body } = await pagesClient({
+    id: canvasId,
+    ownerId: 'test-owner-id',
+    name: 'Live',
+    pages: [{ id: 'first', name: 'Main' }],
+    frames: [],
+  })
+  const { store } = await import('../server/store.ts')
+  try {
+    const ok = await client.callTool({
+      name: 'create_live_frame',
+      arguments: { canvas_id: canvasId, url: 'http://localhost:4321/contact', agent_name: 'Agent' },
+    })
+    expect(ok.isError).toBeFalsy()
+    const created = body(ok) as {
+      ok: boolean
+      frame: { id: string; name: string; width: number; height: number; pageId: string }
+    }
+    expect(created.ok).toBe(true)
+    expect(created.frame.name).toBe('localhost:4321/contact')
+    expect(created.frame.width).toBe(1280)
+    expect(created.frame.height).toBe(800)
+    const frame = store.canvases.get(canvasId)?.frames.find((f) => f.id === created.frame.id)
+    expect(frame?.html).toContain('name="doop-live"')
+    expect(frame?.html).toContain('Open in the Doop desktop app')
+
+    /* the whole point: anything that is not this machine is refused, and
+       nothing was fetched to decide that */
+    const bad = await client.callTool({
+      name: 'create_live_frame',
+      arguments: { canvas_id: canvasId, url: 'https://example.com', agent_name: 'Agent' },
+    })
+    expect(body(bad).ok).toBe(false)
+    expect(store.canvases.get(canvasId)?.frames).toHaveLength(1)
   } finally {
     await close()
   }

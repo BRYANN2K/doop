@@ -1,0 +1,17 @@
+{
+  "$schema": "gen/schemas/desktop-schema.json",
+  "identifier": "live-snapshot",
+  "description": "The hidden webview a live-frame snapshot renders in (src/live.rs): the dev page inside it may invoke exactly one command — live_snapshot_done, which posts the captured DOM back. Nothing else is reachable from the page; the origins it can ever load are loopback-only anyway, re-checked natively before the window exists.",
+  "windows": ["live-snapshot-*"],
+  "remote": {
+    "urls": [
+      "http://localhost*",
+      "https://localhost*",
+      "http://*.localhost*",
+      "https://*.localhost*",
+      "http://127.*",
+      "https://127.*"
+    ]
+  },
+  "permissions": ["allow-live-snapshot-done"]
+}
