@@ -9,6 +9,12 @@
 //! files — are never listed or read, and `.git`/`node_modules`-style dirs are
 //! never descended. The caps below mirror `shared/localRepo.ts`; keep the two
 //! in step.
+//!
+//! `repo_write_change` is the single write surface, for the "Ready for dev →
+//! Stip" handoff: it creates a brand-new `.workflow/changes/<id>/` folder —
+//! never an overwrite, never outside it — and only after the person confirms
+//! a native dialog listing every file. Same sandbox as the reads, stricter:
+//! no symlink anywhere on a write path is followed.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -29,6 +35,13 @@ const MAX_SEARCH_MATCHES: usize = 100;
 const MAX_PATH_CHARS: usize = 500;
 const MAX_QUERY_CHARS: usize = 200;
 const MAX_LINE_CHARS: usize = 300;
+
+/* `repo_write_change` — mirror shared/handoff.ts, keep in step. */
+const WRITE_ROOT: &str = ".workflow/changes";
+const MAX_WRITE_FILES: usize = 24;
+const MAX_WRITE_FILE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_WRITE_BYTES: usize = 12 * 1024 * 1024;
+const MAX_CHANGE_ID: usize = 100;
 
 /// Dirs never listed, descended into, or read under — anywhere in the tree.
 const SKIP_DIRS: &[&str] = &[".git", ".svn", ".hg", "node_modules"];
@@ -95,12 +108,18 @@ fn save_grants(app: &AppHandle, grants: &BTreeMap<String, Grant>) -> Result<(), 
     fs::rename(&tmp, &file).map_err(|e| e.to_string())
 }
 
+/// The grant row `link_id` names on this device.
+fn grant_for(app: &AppHandle, link_id: &str) -> Result<Grant, String> {
+    let grants = load_grants(app)?;
+    grants
+        .get(link_id)
+        .cloned()
+        .ok_or_else(|| "This device does not hold that project's grant".to_string())
+}
+
 /// The grant's folder, canonicalized: reads are checked against this root.
 fn grant_root(app: &AppHandle, link_id: &str) -> Result<PathBuf, String> {
-    let grants = load_grants(app)?;
-    let grant = grants
-        .get(link_id)
-        .ok_or_else(|| "This device does not hold that project's grant".to_string())?;
+    let grant = grant_for(app, link_id)?;
     let root = PathBuf::from(&grant.path)
         .canonicalize()
         .map_err(|_| "The linked folder moved or was removed".to_string())?;
@@ -568,6 +587,210 @@ pub async fn repo_search(
 }
 
 /* ------------------------------------------------------------------ */
+/* write_change — the one write surface                                */
+/* ------------------------------------------------------------------ */
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteFile {
+    path: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    base64: Option<String>,
+}
+
+/// A file validated and decoded, ready to create: its repo-relative path,
+/// where it lands under the grant root, and its bytes.
+struct Prepared {
+    rel: String,
+    target: PathBuf,
+    bytes: Vec<u8>,
+}
+
+/// A Stip change id: workflow.py's `SLUG` — `^[a-z0-9]+(-[a-z0-9]+)*$`.
+fn valid_change_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_CHANGE_ID
+        && id.split('-').all(|part| {
+            !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+/// `rel` must name a NEW file inside `.workflow/changes/<change_id>/` —
+/// clean components only (no `..`, no dot segments, no separators beyond
+/// `/`), no denied names anywhere on the path, and nothing already sitting
+/// at the target. Writes never follow a symlink: every existing component
+/// of the target must be a real directory, and the deepest existing
+/// ancestor must canonicalize inside the grant root.
+fn resolve_change_file(root: &Path, change_id: &str, rel: &str) -> Result<PathBuf, &'static str> {
+    if rel.is_empty() || rel.chars().count() > MAX_PATH_CHARS {
+        return Err("denied");
+    }
+    let mut clean = PathBuf::new();
+    for c in Path::new(rel).components() {
+        match c {
+            Component::Normal(name) => clean.push(name),
+            _ => return Err("denied"),
+        }
+    }
+    /* exactly `.workflow/changes/<change_id>/<something>` — nothing else may be written */
+    let prefix = Path::new(WRITE_ROOT).join(change_id);
+    if !clean.starts_with(&prefix) || clean == prefix {
+        return Err("denied");
+    }
+    if denied_rel(&clean) {
+        return Err("denied");
+    }
+    let target = root.join(&clean);
+    /* every existing component must be a real dir — a symlink anywhere on
+       the path, even pointing back inside the repo, is refused */
+    let mut probe = root.to_path_buf();
+    let mut deepest = root.to_path_buf();
+    for c in clean.components() {
+        probe.push(c.as_os_str());
+        match fs::symlink_metadata(&probe) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err("denied");
+                }
+                if probe == target {
+                    return Err("exists");
+                }
+                deepest = probe.clone();
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return Err("denied"),
+        }
+    }
+    let canonical = deepest.canonicalize().map_err(|_| "denied")?;
+    if !canonical.starts_with(root) {
+        return Err("denied");
+    }
+    Ok(target)
+}
+
+/// Validate the whole request and decode every file's bytes BEFORE the
+/// person is asked: the confirmation only ever lists a writable set.
+fn prepare_change(root: &Path, change_id: &str, files: &[WriteFile]) -> Result<Vec<Prepared>, String> {
+    if !valid_change_id(change_id) {
+        return Err("'changeId' must be a lowercase slug like 'billing-screen-a1b2'".to_string());
+    }
+    if files.is_empty() {
+        return Err("no files to write".to_string());
+    }
+    if files.len() > MAX_WRITE_FILES {
+        return Err(format!("a change takes at most {} files", MAX_WRITE_FILES));
+    }
+    let mut prepared = Vec::with_capacity(files.len());
+    let mut seen = std::collections::HashSet::new();
+    let mut total = 0usize;
+    for f in files {
+        let target = resolve_change_file(root, change_id, &f.path).map_err(|e| format!("{}: {}", f.path, e))?;
+        if !seen.insert(f.path.clone()) {
+            return Err(format!("{}: duplicate path", f.path));
+        }
+        let bytes = match (&f.text, &f.base64) {
+            (Some(text), None) => text.clone().into_bytes(),
+            (None, Some(data)) => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| format!("{}: invalid base64", f.path))?
+            }
+            _ => return Err(format!("{}: exactly one of text or base64 is required", f.path)),
+        };
+        if bytes.len() > MAX_WRITE_FILE_BYTES {
+            return Err(format!("{}: over the {}-byte file cap", f.path, MAX_WRITE_FILE_BYTES));
+        }
+        total += bytes.len();
+        if total > MAX_WRITE_BYTES {
+            return Err(format!("the pack is over the {}-byte total cap", MAX_WRITE_BYTES));
+        }
+        prepared.push(Prepared {
+            rel: f.path.clone(),
+            target,
+            bytes,
+        });
+    }
+    Ok(prepared)
+}
+
+/// Create each prepared file — `create_new` so a race that lands a file
+/// first still fails instead of overwriting. Stops at the first failure and
+/// says what was written before it.
+fn write_prepared(prepared: &[Prepared]) -> Result<Vec<String>, String> {
+    let mut written = Vec::new();
+    for f in prepared {
+        if let Some(parent) = f.target.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {}", f.rel, e))?;
+        }
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&f.target) {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(&f.bytes).map_err(|e| format!("{}: {}", f.rel, e))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(format!("{}: exists", f.rel));
+            }
+            Err(e) => return Err(format!("{}: {}", f.rel, e)),
+        }
+        written.push(f.rel.clone());
+    }
+    Ok(written)
+}
+
+/// Write one Stip change into the linked project — the ONLY write the app
+/// offers. Every file is new, under `.workflow/changes/<change_id>/` only,
+/// after a native confirmation listing them all. Answers `{ dir, written,
+/// repo }`, `"cancelled"` when the person declines, or a sandbox error.
+#[tauri::command]
+pub async fn repo_write_change(
+    app: AppHandle,
+    link_id: String,
+    change_id: String,
+    files: Vec<WriteFile>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let grant = grant_for(&app, &link_id)?;
+        let root = PathBuf::from(&grant.path)
+            .canonicalize()
+            .map_err(|_| "The linked folder moved or was removed".to_string())?;
+        if !root.is_dir() {
+            return Err("The linked folder is not a directory".to_string());
+        }
+        let prepared = prepare_change(&root, &change_id, &files)?;
+        let dir = format!("{}/{}", WRITE_ROOT, change_id);
+        let mut listing = prepared
+            .iter()
+            .take(15)
+            .map(|f| format!("  {}", f.rel))
+            .collect::<Vec<_>>();
+        if prepared.len() > listing.len() {
+            listing.push(format!("  … and {} more", prepared.len() - listing.len()));
+        }
+        let accepted = rfd::MessageDialog::new()
+            .set_title(&format!("Write a Stip change to \"{}\"?", grant.name))
+            .set_description(&format!(
+                "The doop handoff creates {} new file{} under {}/ — nothing existing is changed or overwritten:\n\n{}",
+                prepared.len(),
+                if prepared.len() == 1 { "" } else { "s" },
+                dir,
+                listing.join("\n"),
+            ))
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .show();
+        if accepted != rfd::MessageDialogResult::Ok {
+            return Err("cancelled".to_string());
+        }
+        let written = write_prepared(&prepared)?;
+        Ok(json!({ "dir": dir, "written": written, "repo": grant.name }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/* ------------------------------------------------------------------ */
 /* tests                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -713,5 +936,142 @@ mod tests {
         let paths: Vec<String> = hits.iter().map(|m| m["path"].as_str().unwrap().to_string()).collect();
         assert!(paths.iter().any(|p| p == "src/App.tsx"));
         assert!(!paths.iter().any(|p| p.contains("node_modules")));
+    }
+
+    /* ---- repo_write_change's sandbox (the dialog and grant lookup stay
+       untested: prepare_change/resolve_change_file/write_prepared are the
+       parts that can hurt a repo) ---- */
+
+    fn text_file(path: &str) -> WriteFile {
+        WriteFile {
+            path: path.to_string(),
+            text: Some("body\n".to_string()),
+            base64: None,
+        }
+    }
+
+    #[test]
+    fn change_ids_are_slugs() {
+        for id in ["billing-screen-a1b2", "x", "a-b-c"] {
+            assert!(valid_change_id(id), "{id} should pass");
+        }
+        for id in ["", "A-b", "a_b", "a--b", "-ab", "ab-", "a.b", "a/b"] {
+            assert!(!valid_change_id(id), "{id} should fail");
+        }
+    }
+
+    #[test]
+    fn write_stays_inside_the_change_folder() {
+        let (dir, _outside) = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        let id = "new-change-1";
+        for rel in [
+            "proposal.md",
+            ".workflow/changes/new-change-1",
+            ".workflow/changes/other-9/spec.md",
+            ".workflow/specs/x.md",
+            "src/App.tsx",
+            ".workflow/changes/new-change-1/../evil.md",
+            ".workflow/changes/new-change-1/../../x.md",
+            "/.workflow/changes/new-change-1/x.md",
+            ".workflow/changes/new-change-1/.env",
+            ".workflow/changes/new-change-1/secret-notes.md",
+        ] {
+            assert!(
+                resolve_change_file(&root, id, rel).is_err(),
+                "{rel} should fail"
+            );
+        }
+        for rel in [
+            ".workflow/changes/new-change-1/proposal.md",
+            ".workflow/changes/new-change-1/spec.md",
+            ".workflow/changes/new-change-1/assets/screen-1.png",
+        ] {
+            assert!(
+                resolve_change_file(&root, id, rel).is_ok(),
+                "{rel} should pass"
+            );
+        }
+    }
+
+    #[test]
+    fn write_never_overwrites() {
+        let (dir, _outside) = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        let id = "new-change-2";
+        let rel = ".workflow/changes/new-change-2/proposal.md";
+        let first = prepare_change(&root, id, &[text_file(rel)]).unwrap();
+        write_prepared(&first).unwrap();
+        /* the same file again is refused before any dialog would show */
+        assert!(resolve_change_file(&root, id, rel).is_err());
+        assert!(prepare_change(&root, id, &[text_file(rel)]).is_err());
+        /* an existing directory can't be landed on either */
+        assert!(resolve_change_file(&root, id, ".workflow/changes/new-change-2").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_symlinked_dirs() {
+        let (dir, outside) = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        /* `.workflow/changes` itself is a symlink out — every write under it
+           must be refused even though the files would look inside-folder */
+        let link = root.join(".workflow");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let rel = ".workflow/changes/new-change-3/proposal.md";
+        assert!(resolve_change_file(&root, "new-change-3", rel).is_err());
+    }
+
+    #[test]
+    fn write_decodes_and_caps_content() {
+        let (dir, _outside) = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        let id = "new-change-4";
+        let png = WriteFile {
+            path: ".workflow/changes/new-change-4/assets/a.png".to_string(),
+            text: None,
+            base64: Some(base64::engine::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                [137u8, 80, 78, 71],
+            )),
+        };
+        let prepared = prepare_change(&root, id, &[text_file(".workflow/changes/new-change-4/spec.md"), png]).unwrap();
+        assert_eq!(prepared[1].bytes, vec![137u8, 80, 78, 71]);
+        /* both content kinds set — refused */
+        let both = WriteFile {
+            path: ".workflow/changes/new-change-4/x.md".to_string(),
+            text: Some("a".into()),
+            base64: Some("YQ==".into()),
+        };
+        assert!(prepare_change(&root, id, &[both]).is_err());
+        let bad_b64 = WriteFile {
+            path: ".workflow/changes/new-change-4/y.png".to_string(),
+            text: None,
+            base64: Some("!!!".into()),
+        };
+        assert!(prepare_change(&root, id, &[bad_b64]).is_err());
+    }
+
+    #[test]
+    fn write_prepared_creates_nested_files() {
+        let (dir, _outside) = fixture();
+        let root = dir.path().canonicalize().unwrap();
+        let id = "new-change-5";
+        let prepared = prepare_change(
+            &root,
+            id,
+            &[
+                text_file(".workflow/changes/new-change-5/proposal.md"),
+                text_file(".workflow/changes/new-change-5/assets/deep/one.png"),
+            ],
+        )
+        .unwrap();
+        let written = write_prepared(&prepared).unwrap();
+        assert_eq!(written.len(), 2);
+        assert_eq!(
+            fs::read_to_string(root.join(".workflow/changes/new-change-5/proposal.md")).unwrap(),
+            "body\n"
+        );
+        assert!(root.join(".workflow/changes/new-change-5/assets/deep/one.png").is_file());
     }
 }

@@ -338,6 +338,7 @@ fn main() {
             repo::repo_list,
             repo::repo_read,
             repo::repo_search,
+            repo::repo_write_change,
             server::server_status,
             server::server_choose,
             view_menu::view_menu_state,
