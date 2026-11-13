@@ -286,6 +286,9 @@ export function Inspector({
             </div>
           </InspectorGroup>
         </PropertyScrubContext.Provider>
+        <InspectorGroup title={t('lint.groupQuality')}>
+          <FrameLintIssues frame={frame} />
+        </InspectorGroup>
         <InspectorGroup title={t('inspector.groupExport')}>
           <div className="grid grid-cols-2 gap-1.5">
             <div className="col-span-2">
@@ -413,6 +416,46 @@ export function Inspector({
       </footer>
       {historyOpen && <FrameHistoryModal frame={frame} onClose={() => setHistoryOpen(false)} />}
     </Panel>
+  )
+}
+
+/** The anti-slop verdict: score, then each issue — clicking one selects the
+ *  element it blames so the fix is one click away. */
+function FrameLintIssues({ frame }: { frame: Frame }) {
+  const t = useT()
+  const pickElement = useStore((s) => s.pickElement)
+  const lint = frame.lint
+  if (!lint) {
+    return <p className="m-0 text-[12px] text-ink-faint">{t('lint.notLinted')}</p>
+  }
+  if (lint.issues.length === 0) {
+    return <p className="m-0 text-[12px] text-success-ink">{t('lint.noIssues')}</p>
+  }
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+      {lint.issues.map((issue, i) => (
+        <li key={`${issue.ruleId}-${i}`}>
+          <button
+            type="button"
+            className="flex w-full items-start gap-1.5 rounded-[6px] px-1 py-0.5 text-left text-[12px] hover:bg-sub"
+            title={issue.selector ? t('lint.pickIssueTitle') : undefined}
+            onClick={() => issue.selector && pickElement({ frameId: frame.id, selector: issue.selector })}
+          >
+            <span
+              className={cn(
+                'mt-0.5 shrink-0 rounded-tag px-1 py-px text-micro font-medium',
+                issue.severity === 'error' ? 'bg-warning/[0.12] text-warning-ink' : 'bg-sub text-ink-faint',
+              )}
+            >
+              {issue.severity === 'error' ? t('lint.issueSeverityError') : t('lint.issueSeverityWarning')}
+            </span>
+            <span className="min-w-0 flex-1 text-ink-soft">
+              <span className="font-medium text-ink">{issue.ruleId}</span> {issue.message}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
