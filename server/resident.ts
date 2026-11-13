@@ -73,6 +73,8 @@ import {
 } from '../shared/localRepo.ts'
 import { recordAgentFeedback } from './agentFeedback.ts'
 import { AGENT_IDEA_CATEGORIES, AGENT_ISSUE_CATEGORIES, type AgentFeedbackCategory } from '../shared/agentFeedback.ts'
+import { lintAndStore } from './lint.ts'
+import type { FrameLint } from '../shared/slopRules.ts'
 
 /**
  * The resident design team: a server-side Claude tool loop, run once per
@@ -180,6 +182,7 @@ Rules:
 ${FRAME_STYLES}
 - Prefer edit_frame_html (exact find/replace) for small changes; use set_frame_html only when the change is structural.
 - After any visual change, call screenshot_frame and LOOK at the result. If it doesn't clearly satisfy the feedback, fix it before finishing.
+- Every design change is linted automatically and the findings come back with the tool result; error-level findings must be fixed before you finish — lint_frame re-checks a frame on demand.
 - Call set_status when you start ("Fixing: …") and when your focus shifts. One line, under 80 chars, present tense. People watch this live.
 - Never leave a frame worse than you found it.
 - Reference sites: when a request names a site or URL — a redesign of it, or "like acme.com" — call import_webpage with as_reference=true FIRST so an editable HTML snapshot lands on the canvas, then call screenshot_frame on that imported source and design from what is actually there: its real copy, nav labels, product facts, and imagery direction. Leave the imported source unchanged and deliver your work in a separate frame. If importing or editing the snapshot itself is the requested deliverable, use as_reference=false. view_website is read-only; use it only when you need to inspect a live page without adding it to the canvas. A redesign that invents content is wrong even when it looks good. If automated access is blocked and there is no existing source frame or attached screenshot, stop and ask the user to attach screenshots; never approximate the site from guesses.
@@ -225,6 +228,9 @@ interface RunState {
   verificationFrames: Set<string>
   verifiedFrames: Set<string>
   rewriteDrafts: Map<string, string>
+  /** latest anti-slop verdict per linted frame — error findings block
+   *  completion on the frames the run is delivering */
+  lintResults?: Map<string, FrameLint>
   blockedWebsiteAccess?: string
   /** false = the model cannot see images: screenshots are skipped and the
    *  visual-verification requirement does not apply to this run */
@@ -345,6 +351,30 @@ export function tokenWritesIn(results: readonly TokenResult[]): number {
 
 function verificationFrameIds(runState: RunState): string[] {
   return [...new Set([...runState.mutatedFrames, ...runState.verificationFrames])]
+}
+
+/** Deliverable frames whose latest lint still carries error findings —
+ *  the completion gate's list, alongside verification. */
+function lintBlockedFrameIds(runState: RunState): string[] {
+  return deliverableFrameIds(runState).filter((id) => (runState.lintResults?.get(id)?.errors ?? 0) > 0)
+}
+
+const LINT_NOTE_ISSUES = 8
+
+/** Lint a mutated frame, remember the verdict for the completion gate and
+ *  phrase the result as a tool-result note the model reacts to. A lint that
+ *  could not run says nothing — the work stands on the edit itself. */
+async function lintNote(frameId: string, actor: Actor, runState: RunState): Promise<string> {
+  const lint = await lintAndStore(frameId, actor)
+  if (!lint) return ''
+  ;(runState.lintResults ??= new Map()).set(frameId, lint)
+  if (lint.issues.length === 0) return `\nAnti-slop lint: clean (score ${lint.score}).`
+  const lines = lint.issues
+    .slice(0, LINT_NOTE_ISSUES)
+    .map((i) => `- [${i.severity}] ${i.ruleId} ${i.message}${i.selector ? ` (${i.selector})` : ''}`)
+  const more = lint.issues.length > LINT_NOTE_ISSUES ? `\n- … ${lint.issues.length - LINT_NOTE_ISSUES} more` : ''
+  const ask = lint.errors > 0 ? '\nFix the error-level findings before finishing; lint_frame re-checks.' : ''
+  return `\nAnti-slop lint score ${lint.score} — ${lint.errors} error(s), ${lint.warnings} warning(s):\n${lines.join('\n')}${more}${ask}`
 }
 
 function completeHtml(value: unknown): string | undefined {
@@ -667,6 +697,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
       verificationFrames: new Set(),
       verifiedFrames: new Set(),
       rewriteDrafts: new Map(),
+      lintResults: new Map(),
       vision: model.vision !== false,
       ...(model.userId ? { payerId: model.userId } : {}),
       ...(repoLink && repoUserId ? { repoUserId } : {}),
@@ -686,6 +717,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
     let finished = false
     let mutationNudgeSent = false
     let verificationNudgeSent = false
+    let lintNudgeSent = false
     let outputLimitNudgeSent = false
     let turnsUsed = 0
 
@@ -936,6 +968,15 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
             })
             continue
           }
+          const lintBlocked = lintBlockedFrameIds(runState)
+          if (cards.length > 0 && lintBlocked.length > 0 && !lintNudgeSent) {
+            lintNudgeSent = true
+            messages.push({
+              role: 'user',
+              content: `The anti-slop lint still reports error-level findings on ${lintBlocked.join(', ')}. Fix them with edit_frame_html or a rewrite — each edit re-lints automatically, and lint_frame re-checks on demand — then finish.`,
+            })
+            continue
+          }
           finished = true
           break
         }
@@ -979,6 +1020,10 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
       !blockedWebsiteAccess &&
       cards.length > 0 &&
       verificationFrameIds(runState).some((id) => !runState.verifiedFrames.has(id))
+    /* error-level lint findings on a deliverable hold the card, the way an
+       unverified change does */
+    const unresolvedLint =
+      finished && !blockedWebsiteAccess && cards.length > 0 && lintBlockedFrameIds(runState).length > 0
     const exhausted = !finished && !refused && !crashed
     if (exhausted) actions.setAgentStatus(canvasId, actor, 'Ran out of turns — waiting for a retry')
     if (blockedWebsiteAccess && !staleAccount) {
@@ -986,6 +1031,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
     }
     if (noMutation) actions.setAgentStatus(canvasId, actor, 'Nothing changed — waiting for a retry')
     if (unverifiedMutation) actions.setAgentStatus(canvasId, actor, 'Change not verified — waiting for a retry')
+    if (unresolvedLint) actions.setAgentStatus(canvasId, actor, 'Lint errors remain — waiting for a retry')
     console.log(
       `[resident] run end canvas=${canvasId} agent=${role.name} turns=${turnsUsed} finished=${finished} refused=${refused} crashed=${crashed} mutations=${runState.mutatedFrames.size} sources=${runState.sourceFrames.size} deliverables=${deliverableFrames.length} tokenWrites=${runState.tokenWrites} arrangeWrites=${runState.arrangeWrites} verified=${runState.verifiedFrames.size}`,
     )
@@ -1004,7 +1050,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
       }
     }
     if (canceled()) return 'ran'
-    if (finished && !blockedWebsiteAccess && !noMutation && !unverifiedMutation) {
+    if (finished && !blockedWebsiteAccess && !noMutation && !unverifiedMutation && !unresolvedLint) {
       for (const f of claimed) actions.completeTaskFeedback(f.id)
       settleComments(canvasId, comments, actor, { ok: true, summary }, runState)
       /* a card moves to the next agent in its pipeline, or finishes here */
@@ -1027,6 +1073,8 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
         reason = `${role.name} ran out of turns before finishing. Retry when you are ready.`
       } else if (noMutation) {
         reason = `${role.name} finished without changing a frame or a token. Retry when you are ready.`
+      } else if (unresolvedLint) {
+        reason = `${role.name} finished with unresolved lint errors. Retry when you are ready.`
       } else {
         reason = `${role.name} changed a frame but could not verify it. Retry when you are ready.`
       }
@@ -1305,6 +1353,7 @@ async function runChat(
     verificationFrames: new Set(),
     verifiedFrames: new Set(),
     rewriteDrafts: new Map(),
+    lintResults: new Map(),
     vision: model.vision !== false,
     ...(model.userId ? { payerId: model.userId } : {}),
     ...(repoLink && repoUserId ? { repoUserId } : {}),
@@ -2118,6 +2167,16 @@ const TOOLS: Anthropic.Tool[] = [
       required: ['frame_id'],
     },
   },
+  {
+    name: 'lint_frame',
+    description:
+      'Re-run the anti-slop checks on a frame and get its score and findings. Edits lint automatically — call this to re-check without changing the design, or to read the findings on a frame you did not touch.',
+    input_schema: {
+      type: 'object',
+      properties: { frame_id: { type: 'string' } },
+      required: ['frame_id'],
+    },
+  },
 ]
 
 /* the same tools as MCP, minus the arguments a resident run already has */
@@ -2312,8 +2371,9 @@ export async function execTool(
         if (!f) return fail('canvas not found')
         runState.mutatedFrames.add(f.id)
         runState.verifiedFrames.delete(f.id)
+        const lint = await lintNote(f.id, actor, runState)
         return ok(
-          `created frame ${f.id} ("${f.name}", ${Math.round(f.width)}x${Math.round(f.height)}) — it is revealing to viewers now`,
+          `created frame ${f.id} ("${f.name}", ${Math.round(f.width)}x${Math.round(f.height)}) — it is revealing to viewers now${lint}`,
         )
       }
       case 'inspect_frame': {
@@ -2384,7 +2444,8 @@ export async function execTool(
         runState.mutatedFrames.add(input.frame_id)
         runState.verifiedFrames.delete(input.frame_id)
         const notes = componentWriteNotes(store.getFrame(input.frame_id)!)
-        return ok(notes.length ? `applied\n${notes.join('\n')}` : 'applied')
+        const lint = await lintNote(input.frame_id, actor, runState)
+        return ok(notes.length ? `applied\n${notes.join('\n')}${lint}` : `applied${lint}`)
       }
       case 'set_frame_html': {
         const f = store.getFrame(input.frame_id)
@@ -2403,7 +2464,8 @@ export async function execTool(
         actions.updateFrame(input.frame_id, { html }, actor)
         runState.mutatedFrames.add(input.frame_id)
         runState.verifiedFrames.delete(input.frame_id)
-        return ok('applied — the new design is revealing to viewers now')
+        const lint = await lintNote(input.frame_id, actor, runState)
+        return ok(`applied — the new design is revealing to viewers now${lint}`)
       }
       case 'begin_frame_rewrite': {
         const f = store.getFrame(input.frame_id)
@@ -2441,7 +2503,8 @@ export async function execTool(
         runState.rewriteDrafts.delete(input.frame_id)
         runState.mutatedFrames.add(input.frame_id)
         runState.verifiedFrames.delete(input.frame_id)
-        return ok(`committed ${html.length} characters — the new design is revealing to viewers now`)
+        const lint = await lintNote(input.frame_id, actor, runState)
+        return ok(`committed ${html.length} characters — the new design is revealing to viewers now${lint}`)
       }
       case 'search_images': {
         if (!imageSearch.photoSearchEnabled())
@@ -2652,12 +2715,14 @@ export async function execTool(
         if (raw.as_reference) runState.sourceFrames.add(f.id)
         else runState.sourceFrames.delete(f.id)
         runState.verifiedFrames.delete(f.id)
+        /* a source frame's findings inform but never gate the card */
+        const lint = await lintNote(f.id, actor, runState)
         return ok(
           `Imported ${requestedUrl} as editable frame ${f.id} ("${f.name}", ${Math.round(f.width)}x${Math.round(f.height)}, ${f.html.length} HTML characters). Call screenshot_frame with frame_id=${f.id}.${
             raw.as_reference
               ? ' Leave this source frame unchanged and deliver the new design separately.'
               : ' This imported frame is the requested deliverable and may be edited directly.'
-          }`,
+          }${lint}`,
         )
       }
       case 'get_reference': {
@@ -2877,14 +2942,16 @@ export async function execTool(
         if (!updated.ok) return fail(updated.error)
         const frame = updated.value
         /* a new size changes what renders, so it is a design change to verify */
+        let lint = ''
         if (frame.width !== before.width || frame.height !== before.height) {
           runState.mutatedFrames.add(frame.id)
           runState.verifiedFrames.delete(frame.id)
+          lint = await lintNote(frame.id, actor, runState)
         }
         /* a save that changed nothing has not delivered anything */
         if (arrangement(frame) !== before.arrangement) runState.arrangeWrites += 1
         return ok(
-          `frame ${frame.id} is now "${frame.name}" on page ${framePageId(canvas, frame)} at (${Math.round(frame.x)}, ${Math.round(frame.y)}), ${Math.round(frame.width)}x${Math.round(frame.height)}${frame.locked ? ', locked' : ''}`,
+          `frame ${frame.id} is now "${frame.name}" on page ${framePageId(canvas, frame)} at (${Math.round(frame.x)}, ${Math.round(frame.y)}), ${Math.round(frame.width)}x${Math.round(frame.height)}${frame.locked ? ', locked' : ''}${lint}`,
         )
       }
       case 'create_canvas_page': {
@@ -2940,6 +3007,29 @@ export async function execTool(
         }
         return ok(blocks)
       }
+      case 'lint_frame': {
+        const f = store.getFrame(input.frame_id)
+        if (!f || f.canvasId !== canvasId) return fail('frame not found on this canvas')
+        const lint = await lintAndStore(input.frame_id, actor)
+        if (!lint) return fail('lint could not run on this frame')
+        ;(runState.lintResults ??= new Map()).set(input.frame_id, lint)
+        return ok(
+          JSON.stringify({
+            score: lint.score,
+            errors: lint.errors,
+            warnings: lint.warnings,
+            engine: lint.engine,
+            issues: lint.issues.map((i) => ({
+              rule: i.ruleId,
+              severity: i.severity,
+              message: i.message,
+              ...(i.elementId ? { element: i.elementId } : {}),
+              ...(i.selector ? { selector: i.selector } : {}),
+              ...(i.detail ? { detail: i.detail } : {}),
+            })),
+          }),
+        )
+      }
       case 'screenshot_component': {
         const def = findComponent(canvasId, String(input.component ?? ''))
         if (!def) return fail(`no component "${String(input.component)}" on this canvas`)
@@ -2966,7 +3056,11 @@ export async function execTool(
           runState.verifiedFrames.delete(frame.id)
           return componentWriteNotes(frame)
         })
-        return ok([JSON.stringify(data), ...(note ? [note] : []), ...notes].join('\n'))
+        const lintNotes: string[] = []
+        for (const frame of frames ?? []) {
+          lintNotes.push(await lintNote(frame.id, actor, runState))
+        }
+        return ok([JSON.stringify(data), ...(note ? [note] : []), ...notes, ...lintNotes.filter(Boolean)].join('\n'))
       }
     }
   } catch (e) {
