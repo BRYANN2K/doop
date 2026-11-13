@@ -692,6 +692,7 @@ export const api = {
       body: JSON.stringify({ status, expectedUpdatedAt }),
     }),
   /* design history: the states earlier edits replaced, newest first (no HTML) */
+  frame: (frameId: string) => req<Frame>(`/api/frames/${frameId}`),
   frameVersions: (frameId: string) => req<FrameVersionInfo[]>(`/api/frames/${frameId}/versions`),
   frameVersion: (frameId: string, versionId: string) =>
     req<FrameVersion>(`/api/frames/${frameId}/versions/${versionId}`),

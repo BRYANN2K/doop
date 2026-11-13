@@ -155,6 +155,8 @@ export const actions = {
   findAllPagesShort: 'All',
   findFramesSummary: '{frames} frames · {total} matches',
   findShowInside: 'Show what matched inside',
+  findVariants: '{count} variants',
+  findMatches: '{count} matches',
   matchCase: 'Match case',
   previousMatch: 'Previous match',
   nextMatch: 'Next match',

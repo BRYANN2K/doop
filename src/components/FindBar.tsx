@@ -17,6 +17,7 @@ import { Input } from './ui/input'
 import { Pressable } from './ui/pressable'
 import { SearchField } from './ui/search-field'
 import { FramePreview } from './FramePreview'
+import { FindPreview } from './FindPreview'
 
 interface Hit {
   frame: Frame
@@ -78,8 +79,26 @@ function groupByFrame(hits: CanvasFindHit[], query: string): FrameGroup[] {
     const label = ids.find((id) => id !== g.id) ?? `${hit.before.slice(-24)}${hit.text}${hit.after.slice(0, 24)}`.trim()
     if (!g.inside.some((x) => x.label === label)) g.inside.push({ label, hit })
   }
-  return groups
+  return groups.sort((a, b) => relevance(b, q) - relevance(a, q))
 }
+
+/* what you searched for first: a frame named for it, then a sheet holding
+   variants of it, then passing mentions; section headers (§) last */
+function relevance(g: FrameGroup, q: string): number {
+  const id = (g.id ?? '').toLowerCase()
+  const label = g.label.toLowerCase()
+  let score = 0
+  if (id.includes(q)) score += 1000
+  if (id.split(/[.-]/).includes(q)) score += 400
+  if (label.includes(q)) score += 300
+  score += Math.min(variantIds(g).length, 30) * 25
+  score += Math.min(g.hits.length, 20)
+  if (g.label.startsWith('§') || id.startsWith('§')) score -= 2000
+  return score
+}
+
+const looksLikeId = (s: string) => /^[a-z][\w-]*\.[\w.-]+$/i.test(s)
+const variantIds = (g: FrameGroup) => g.inside.filter((x) => looksLikeId(x.label))
 
 /** How long typing settles before an all-pages search asks the server. */
 const CANVAS_FIND_DEBOUNCE_MS = 220
@@ -183,6 +202,8 @@ export function FindBar({
   const groups = useMemo(() => groupByFrame(remoteHits, query), [remoteHits, query])
   const [open, setOpen] = useState<Set<string>>(() => new Set())
   const [hovered, setHovered] = useState<string | null>(null)
+  /* a variant picked in an expanded row: the preview frames that one */
+  const [focusPick, setFocusPick] = useState<{ frameId: string; label: string } | null>(null)
   const listLength = scope === 'canvas' ? groups.length : hits.length
   const active = listLength ? Math.min(cursor, listLength - 1) : -1
 
@@ -197,6 +218,7 @@ export function FindBar({
     const group = groups[index]
     if (!group) return
     setCursor(index)
+    setFocusPick(null)
     /* the frame's first readable match is picked; a name match just frames it */
     flyToHit(group.hits.find((h) => h.where === 'text') ?? group.hits[0]!)
   }
@@ -364,10 +386,18 @@ export function FindBar({
       )}
       {scope === 'canvas' && groups.length > 0 && (
         <>
-          {/* the frame under the pointer, else the active one, shown big */}
-          <div className="relative h-44 flex-none overflow-hidden rounded-row bg-sub ring-1 ring-line-soft">
-            <FramePreview frameId={hovered ?? groups[Math.max(active, 0)]?.frameId} empty={null} />
-          </div>
+          {/* the frame under the pointer, else the active one, live and framed on what matched */}
+          {(() => {
+            const shown = groups.find((g) => g.frameId === hovered) ?? groups[Math.max(active, 0)]
+            if (!shown) return null
+            const q = query.trim()
+            const focus =
+              focusPick?.frameId === shown.frameId
+                ? focusPick.label
+                : (variantIds(shown)[0]?.label ??
+                  (shown.id && shown.id.toLowerCase().includes(q.toLowerCase()) ? shown.id : q))
+            return <FindPreview frameId={shown.frameId} focus={focus} />
+          })()}
           <p className="px-1 text-caption text-ink-faint">
             {t('actions.findFramesSummary', { frames: groups.length, total: remote?.total ?? remoteHits.length })}
           </p>
@@ -377,15 +407,10 @@ export function FindBar({
             onMouseLeave={() => setHovered(null)}
           >
             {groups.slice(0, 300).map((g, i) => {
-              const newPage = i === 0 || groups[i - 1]!.pageId !== g.pageId
               const expanded = open.has(g.frameId)
+              const variants = variantIds(g).length
               return (
                 <li key={g.frameId}>
-                  {newPage && (
-                    <p className="sticky top-0 z-10 bg-surface px-2 pt-2 pb-1 font-mono text-micro tracking-wide text-ink-faint uppercase">
-                      {g.pageName}
-                    </p>
-                  )}
                   <div
                     className={cn(
                       'flex items-center gap-2 rounded-row px-1.5 py-1',
@@ -403,11 +428,16 @@ export function FindBar({
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate font-mono text-caption text-ink">{g.id ?? g.label}</span>
-                        {g.id && <span className="truncate text-caption text-ink-faint">{g.label}</span>}
+                        <span className="truncate text-caption text-ink-faint">
+                          {g.id ? `${g.label} · ` : ''}
+                          {g.pageName}
+                        </span>
                       </span>
                     </Pressable>
-                    <span className="flex-none font-mono text-caption text-ink-faint tabular-nums">
-                      {g.hits.length}
+                    <span className="flex-none text-caption text-ink-faint tabular-nums">
+                      {variants
+                        ? t('actions.findVariants', { count: variants })
+                        : t('actions.findMatches', { count: g.hits.length })}
                     </span>
                     {g.inside.length > 0 ? (
                       <IconButton
@@ -442,6 +472,7 @@ export function FindBar({
                             focus="none"
                             onClick={() => {
                               setCursor(i)
+                              setFocusPick({ frameId: g.frameId, label: x.label })
                               flyToHit(x.hit)
                             }}
                             className="w-full truncate rounded-row px-1.5 py-0.5 text-left font-mono text-caption text-ink-soft hover:bg-sub"

@@ -155,6 +155,8 @@ export const actions: Catalog['actions'] = {
   findAllPagesShort: 'Tudo',
   findFramesSummary: '{frames} frames · {total} resultados',
   findShowInside: 'Mostrar o que foi encontrado dentro',
+  findVariants: '{count} variantes',
+  findMatches: '{count} resultados',
   matchCase: 'Diferenciar maiúsculas',
   previousMatch: 'Resultado anterior',
   nextMatch: 'Próximo resultado',
