@@ -305,6 +305,15 @@ export async function inspectElement(frameId: string, selector: string): Promise
   return infoOf(await requestFrame(frameId, 'doop:inspect', { selector }))
 }
 
+/** The lint snapshot the frame's live document yields, or null when the
+ *  frame is not mounted or the collector failed. */
+export async function slopSnapshotOf(frameId: string) {
+  const reply = await requestFrame(frameId, 'doop:slop-snapshot', {})
+  return reply && reply.snapshot && typeof reply.snapshot === 'object'
+    ? (reply.snapshot as import('../../shared/slopRules').SlopSnapshot)
+    : null
+}
+
 /** Write inline styles onto the element. The runtime saves the edited
  *  document through the frame's normal edit path and answers with the
  *  element's fresh properties. */
