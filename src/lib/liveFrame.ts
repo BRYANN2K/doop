@@ -66,7 +66,11 @@ export function onLiveFrameReload(frameId: string, cb: () => void): () => void {
 export async function snapshotLiveFrame(frame: Frame): Promise<Frame> {
   const url = liveFrameUrl(frame.html)
   if (!url) throw new Error('This frame has no live URL.')
-  const result = await invokeLive<{ html: string }>('live_snapshot', { url })
+  const result = await invokeLive<{ html: string }>('live_snapshot', {
+    url,
+    width: frame.width,
+    height: frame.height,
+  })
   const html = snapshotFrameHtml(result.html, url)
   const name = `${frame.name} — snapshot`.slice(0, 80)
   const snapshot = await api.createFrame(frame.canvasId, {

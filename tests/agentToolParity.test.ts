@@ -40,6 +40,7 @@ const MISSING = [
   'set_page_background',
   'export_frame',
   'upload_asset',
+  'create_live_frame',
   'list_linear_issues', // integration tools, registered by their connections
   'get_linear_issue',
 ]
