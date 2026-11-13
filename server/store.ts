@@ -1077,6 +1077,17 @@ class Store {
     return frame
   }
 
+  /** Record the latest anti-slop lint on a frame. Derived metadata, not an
+   *  edit: updatedAt/updatedBy and the canvas stamp stay, so lint writes can
+   *  land mid-burst without rewriting history or sign-off. */
+  setFrameLint(frameId: string, lint: Frame['lint']): Frame | undefined {
+    const frame = this.getFrame(frameId)
+    if (!frame) return undefined
+    frame.lint = lint
+    persist.saveFrame(frame)
+    return frame
+  }
+
   deleteFrame(frameId: string): Frame | undefined {
     const canvasId = this.frameIndex.get(frameId)
     if (!canvasId) return undefined

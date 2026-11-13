@@ -2414,6 +2414,15 @@ export function setFrameApproval(
   return frame
 }
 
+/** Record a lint pass and tell the room — a small dedicated message rather
+ *  than frame:updated, since the design itself never moved. No activity
+ *  line: lint is bookkeeping, not design work. */
+export function setFrameLint(frameId: string, lint: Frame['lint'], actor: Actor): Frame | undefined {
+  const frame = store.setFrameLint(frameId, lint)
+  if (frame && lint) broadcast(frame.canvasId, { type: 'frame:lint', frameId, lint, actor })
+  return frame
+}
+
 export function isFrameStreaming(frameId: string): boolean {
   return streams.has(frameId) || reveals.has(frameId)
 }

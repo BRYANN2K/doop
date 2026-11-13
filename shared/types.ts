@@ -3,6 +3,7 @@ import type { CanvasRole, LinkAccess } from './canvasRole.ts'
 import type { ComponentDef } from './components.ts'
 import type { DesignToken } from './designTokens.ts'
 import type { RunnerPick } from './agentRunner.ts'
+import type { FrameLint } from './slopRules.ts'
 
 export interface Frame {
   id: string
@@ -42,6 +43,9 @@ export interface Frame {
    *  is not looking at. The HTML follows on request (`frames:load`); a frame
    *  carrying its HTML never has this. */
   htmlDeferred?: boolean
+  /** Latest anti-slop lint of the frame's design (shared/slopRules.ts):
+   *  score + issues, recomputed after each creation or design edit. */
+  lint?: FrameLint
 }
 
 /** The HTML of one frame that arrived deferred. */
@@ -686,6 +690,9 @@ export type ServerMessage =
   | { type: 'frame:updated'; frame: Frame; actor: Actor }
   | { type: 'frame:deleted'; frameId: string; actor: Actor }
   | { type: 'frame:streaming'; frameId: string; active: boolean; actor: Actor }
+  /** a lint pass landed: the badge and Quality rail read this — slimmer than
+   *  frame:updated since the HTML never changed */
+  | { type: 'frame:lint'; frameId: string; lint: FrameLint; actor: Actor }
   | { type: 'canvas:renamed'; name: string; actor: Actor }
   | { type: 'canvas:pages'; pages: CanvasPageInfo[]; actor: Actor }
   /** a ruler guide was added or moved (guide set) or removed (null) */

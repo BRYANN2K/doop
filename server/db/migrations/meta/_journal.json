@@ -386,6 +386,13 @@
       "when": 1794512559955,
       "tag": "0055_chat_runner",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1794609131203,
+      "tag": "0056_frame_lint",
+      "breakpoints": true
     }
   ]
 }
