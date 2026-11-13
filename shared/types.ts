@@ -421,8 +421,8 @@ export interface AgentTask {
   scope?: CardScope
   /** structured board cards the resident runner dispatches on, instead of
    *  handing the title to the chat agent. Absent on prompt cards. */
-  kind?: RepoCardKind
-  payload?: RepoCardPayload
+  kind?: CardKind
+  payload?: RepoCardPayload | DriftCardPayload
   /** board cards: the connection and model the composer picked for this
    *  card; absent runs on the requester's Settings default */
   runner?: RunnerPick
@@ -435,6 +435,10 @@ export interface CardScope {
 }
 
 export type RepoCardKind = 'sketch' | 'design-system'
+
+/** Structured card kinds beyond the repo import: 'drift' asks the resident
+ *  to review the gaps between a designed frame and its shipped capture. */
+export type CardKind = RepoCardKind | 'drift'
 
 /** A screen of a connected GitHub repository, as the import manifest lists it. */
 export interface RepoScreenRef {
@@ -455,6 +459,18 @@ export interface RepoCardPayload {
   importId: string
   /** the screen to sketch — absent on a design-system card */
   screen?: RepoScreenRef
+}
+
+/** What a drift card carries: the designed frame, the shipped capture frame
+ *  beside it and the score of the comparison that queued it — the run posts
+ *  the gaps as severity-tagged comments. */
+export interface DriftCardPayload {
+  frameId: string
+  shippedFrameId?: string
+  url: string
+  score?: number
+  /** the drift_comparisons row this card was queued from */
+  driftId: string
 }
 
 /** Human feedback left on an agent task: an open request on the canvas that ANY

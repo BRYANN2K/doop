@@ -28,7 +28,8 @@ import type {
   GuidelineDoc,
   MemoryProposal,
   MemoryReference,
-  RepoCardKind,
+  CardKind,
+  DriftCardPayload,
   RepoCardPayload,
   TaskFeedback,
 } from '../../shared/types.ts'
@@ -789,7 +790,7 @@ function runnerField(runner: string | null): Pick<AgentTask, 'runner'> {
 function repoCardFields(kind: string | null, payload: string | null): Pick<AgentTask, 'kind' | 'payload'> {
   if (!kind || !payload) return {}
   try {
-    return { kind: kind as RepoCardKind, payload: JSON.parse(payload) as RepoCardPayload }
+    return { kind: kind as CardKind, payload: JSON.parse(payload) as RepoCardPayload | DriftCardPayload }
   } catch {
     return {}
   }

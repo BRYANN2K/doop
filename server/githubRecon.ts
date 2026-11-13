@@ -15,7 +15,7 @@ import {
   wrapRepoHtml,
   type GithubConnection,
 } from './github.ts'
-import type { Actor, AgentTask, Frame, RepoScreenRef } from '../shared/types.ts'
+import type { Actor, AgentTask, Frame, RepoCardKind, RepoCardPayload, RepoScreenRef } from '../shared/types.ts'
 
 /**
  * The GitHub import's runner: the resident Doop agent hands every repo card
@@ -417,7 +417,7 @@ export function designSystemSlug(repo: string): string {
 /* ------------------------------------------------------------------ */
 /* The runner                                                          */
 
-type RepoCard = AgentTask & { payload: NonNullable<AgentTask['payload']> }
+type RepoCard = AgentTask & { kind: RepoCardKind; payload: RepoCardPayload }
 
 function isRepoCard(card: AgentTask): card is RepoCard {
   return (card.kind === 'sketch' || card.kind === 'design-system') && !!card.payload

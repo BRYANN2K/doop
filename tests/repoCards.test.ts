@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RepoScreenRef } from '../shared/types.ts'
+import type { RepoCardPayload, RepoScreenRef } from '../shared/types.ts'
 
 /* Same stubs as residentQueue.test.ts: the queue mirrors into Postgres and
    broadcasts; a unit test only cares about the cards themselves. */
@@ -70,7 +70,7 @@ describe('addRepoCards', () => {
     expect(cards[1]!.payload).toEqual({
       connectionId: 'conn-1',
       repo: 'acme/app',
-      importId: cards[0]!.payload!.importId,
+      importId: (cards[0]!.payload as RepoCardPayload).importId,
       screen: button,
     })
     /* oldest first is how the sweep works a queue */
@@ -115,7 +115,7 @@ describe('addRepoCards', () => {
     expect(claimed).toHaveLength(1)
     expect(claimed[0]!.agentName).toBe(AGENT)
     expect(claimed[0]!.kind).toBe('sketch')
-    expect(claimed[0]!.payload?.screen?.sourcePath).toBe('src/ui/Button.tsx')
+    expect((claimed[0]!.payload as RepoCardPayload).screen?.sourcePath).toBe('src/ui/Button.tsx')
     expect(actions.takeQueuedCardsFor(canvasId, AGENT, 'user-1')).toHaveLength(0)
   })
 })

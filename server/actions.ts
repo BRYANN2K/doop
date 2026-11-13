@@ -62,6 +62,7 @@ import type {
   MemoryReference,
   RepoCardKind,
   RepoCardPayload,
+  DriftCardPayload,
   RepoScreenRef,
   ServerMessage,
   TaskFeedback,
@@ -720,13 +721,14 @@ export async function addElementComment(
   input: FrameAnchorInput & { text: string },
   from: string,
   fromUserId?: string,
+  kind: ActorKind = 'user',
 ): Promise<ElementComment | undefined> {
   const frame = store.getFrame(frameId)
   if (!frame || !input.text.trim()) return undefined
   const anchor = await frameAnchor(frame, input, from)
   /* a frame deleted while its element was being stamped takes no comment */
   if (!store.getFrame(frameId)) return undefined
-  return postComment(frame.canvasId, anchor, input.text, from, fromUserId)
+  return postComment(frame.canvasId, anchor, input.text, from, fromUserId, kind)
 }
 
 /** The anchor as it is written onto a comment; what the anchor does not
@@ -1569,7 +1571,14 @@ export function planRepoCards(
 ): { kind: RepoCardKind; title: string; payload: RepoCardPayload }[] {
   if (!store.getCanvas(canvasId)) return []
   const list = taskLog.get(canvasId) ?? []
-  const open = list.filter((t) => t.queuedBy && !t.endedAt && t.payload?.connectionId === input.connectionId)
+  const open = list.filter(
+    (t): t is AgentTask & { payload: RepoCardPayload } =>
+      t.queuedBy !== undefined &&
+      !t.endedAt &&
+      t.payload != null &&
+      'connectionId' in t.payload &&
+      t.payload.connectionId === input.connectionId,
+  )
   const importId = nanoid(8)
   const base = { connectionId: input.connectionId, repo: input.repo, importId }
   const wanted: { kind: RepoCardKind; title: string; payload: RepoCardPayload }[] = []
@@ -1628,6 +1637,62 @@ export function addRepoCards(canvasId: string, input: RepoImportInput, from: str
     import('./resident.ts').then((r) => r.onFeedback(canvasId)).catch(() => {})
   }
   return cards
+}
+
+/** What the drift compare asks the resident to do (server/drift.ts): narrate
+ *  the gaps between the designed frame and its shipped capture as comments. */
+export function queueDriftCard(
+  canvasId: string,
+  input: { frameName: string } & DriftCardPayload,
+  from: string,
+  fromUserId: string,
+): AgentTask {
+  const list = taskLog.get(canvasId) ?? []
+  /* an open drift card for the same pair already covers this ask */
+  const open = list.find(
+    (t) =>
+      t.queuedBy &&
+      !t.endedAt &&
+      t.kind === 'drift' &&
+      t.payload != null &&
+      'frameId' in t.payload &&
+      t.payload.frameId === input.frameId &&
+      t.payload.url === input.url,
+  )
+  if (open) return open
+  const { frameName, ...payload } = input
+  const card: AgentTask = {
+    id: nanoid(8),
+    agentName: '',
+    color: colorFor(from),
+    status:
+      `Drift review — “${frameName}” vs ${driftCardHost(input.url)}` +
+      (input.score !== undefined ? ` (pixel drift ${input.score}%)` : '') +
+      ': screenshot the two attached frames (the design first, its shipped capture second) and post every gap you see — spacing, color, typography, missing text — with post_drift_finding, one call per finding, each with a severity.',
+    startedAt: Date.now(),
+    queuedBy: from,
+    queuedByUserId: fromUserId,
+    pipeline: [DEFAULT_ROLE_ID],
+    stage: 0,
+    kind: 'drift',
+    payload,
+    attachments: [payload.frameId, payload.shippedFrameId].filter((id): id is string => !!id),
+  }
+  list.unshift(card)
+  persist.saveTask(canvasId, card)
+  broadcast(canvasId, { type: 'task', task: card })
+  taskLog.set(canvasId, trimTaskLog(list))
+  logActivity(canvasId, resolveActor({ name: from, kind: 'user' }), `queued a drift review of “${frameName}”`)
+  import('./resident.ts').then((r) => r.onFeedback(canvasId)).catch(() => {})
+  return card
+}
+
+function driftCardHost(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url.slice(0, 60)
+  }
 }
 
 /** Cards waiting on THIS agent's stage, claimed by it. A card at another

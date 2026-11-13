@@ -1,4 +1,5 @@
 import { env } from './env.ts'
+import { DRIFT_SEVERITIES, isDriftSeverity } from '../shared/drift.ts'
 import { MAX_DECISION_CHARS } from '../shared/designDecisions.ts'
 import type Anthropic from '@anthropic-ai/sdk'
 import { store } from './store.ts'
@@ -252,6 +253,8 @@ interface RunState {
    *  reordered or deleted, a frame renamed or moved): work a card can ask
    *  for on its own, delivered without a design change */
   arrangeWrites: number
+  /** drift findings posted as comments: a drift card's delivery */
+  driftFindings?: number
   /* ---- chat runs only ---- */
   /** the asks this chat run claimed, oldest first */
   chatAsks?: ChatMessage[]
@@ -333,9 +336,16 @@ function deliverableFrameIds(runState: RunState): string[] {
  *  own changed or created, or a token or arrangement write that took.
  *  Exported for tests. */
 export function deliveredWork(
-  runState: Pick<RunState, 'mutatedFrames' | 'sourceFrames' | 'tokenWrites' | 'arrangeWrites'>,
+  runState: Pick<RunState, 'mutatedFrames' | 'sourceFrames' | 'tokenWrites' | 'arrangeWrites'> & {
+    driftFindings?: number
+  },
 ): boolean {
-  return deliverableFrameIds(runState as RunState).length > 0 || runState.tokenWrites > 0 || runState.arrangeWrites > 0
+  return (
+    deliverableFrameIds(runState as RunState).length > 0 ||
+    runState.tokenWrites > 0 ||
+    runState.arrangeWrites > 0 ||
+    (runState.driftFindings ?? 0) > 0
+  )
 }
 
 /** How many of a token call's results took. Exported for tests. */
@@ -473,9 +483,10 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
     return 'no-model'
   }
   /* structured repo cards (the GitHub import) have their own runner with
-     repo-reading tools; only prompt cards go through the chat loop below */
-  const repoCards = allCards.filter((c) => c.kind)
-  const cards = allCards.filter((c) => !c.kind)
+     repo-reading tools; drift-review cards ride the loop below like prompt
+     cards — their delivery is findings, not frame edits */
+  const repoCards = allCards.filter((c) => c.kind === 'sketch' || c.kind === 'design-system')
+  const cards = allCards.filter((c) => !c.kind || c.kind === 'drift')
   /* latched: Retry clears a stopped card's failure on this same object, and
      the old run, still letting go, must not take the retried card for its own */
   let stopped = false
@@ -677,6 +688,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
       awaitingThreads: new Set(),
       tokenWrites: 0,
       arrangeWrites: 0,
+      driftFindings: 0,
     }
     let refused = false
     let crashed = false
@@ -753,7 +765,11 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
             },
           ]
         : []
-      const runTools = repoLink ? [...TOOLS, ...REPO_TOOLS] : TOOLS
+      const runTools = [
+        ...TOOLS,
+        ...(repoLink ? REPO_TOOLS : []),
+        ...(cards.some((c) => c.kind === 'drift') ? DRIFT_TOOLS : []),
+      ]
       const noVisionBlock = runState.vision
         ? []
         : [
@@ -2193,6 +2209,34 @@ export const REPO_TOOLS: Anthropic.Tool[] = [
   },
 ]
 
+/** Drift-review runs (kind 'drift' cards, server/drift.ts): the gaps the
+ *  agent posts onto a frame as severity-tagged comments, one call each. */
+export const DRIFT_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'post_drift_finding',
+    description:
+      'Post one designed-vs-shipped gap as a comment on a frame, tagged with a severity. Call once per finding — spacing, color, typography, missing or changed text, imagery. Anchor it with x/y in frame coordinates when the gap has a place; post on the shipped capture frame when the gap is about what shipped.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        frame_id: { type: 'string', description: 'The frame to pin the finding on' },
+        severity: {
+          type: 'string',
+          enum: [...DRIFT_SEVERITIES],
+          description: 'critical = broken or missing, major = visibly different, minor = polish',
+        },
+        text: { type: 'string', description: 'The gap in one or two sentences, specific enough to act on' },
+        x: { type: 'number', description: 'Optional x in frame coordinates where the gap sits' },
+        y: { type: 'number' },
+      },
+      required: ['frame_id', 'severity', 'text'],
+    },
+  },
+]
+
+/** How many findings one drift run may post — more buries the report. */
+const MAX_DRIFT_FINDINGS = 20
+
 function canReadCanvas(userId: string, canvasId: string): boolean {
   const other = store.getCanvas(canvasId)
   return !!other && roleAllows(canvasRole(userId, other), 'view')
@@ -2760,6 +2804,29 @@ export async function execTool(
         const already = found.resolvedAt !== undefined
         actions.resolveComment(id, actor.name)
         return ok(already ? 'that thread was already resolved' : 'resolved')
+      }
+      case 'post_drift_finding': {
+        const raw = block.input as { frame_id?: unknown; severity?: unknown; text?: unknown; x?: unknown; y?: unknown }
+        const frame = store.getFrame(String(raw.frame_id ?? ''))
+        if (!frame || frame.canvasId !== canvasId) return fail('no such frame on this canvas')
+        if ((runState.driftFindings ?? 0) >= MAX_DRIFT_FINDINGS)
+          return fail(
+            `enough findings already — ${MAX_DRIFT_FINDINGS} are up; summarize the rest in your final message`,
+          )
+        const severity = isDriftSeverity(raw.severity) ? raw.severity : 'minor'
+        const text = String(raw.text ?? '').trim()
+        if (!text) return fail('text must say what the gap is')
+        const point = Number.isFinite(raw.x) && Number.isFinite(raw.y) ? { x: Number(raw.x), y: Number(raw.y) } : {}
+        const comment = await actions.addElementComment(
+          frame.id,
+          { ...point, text: `[${severity}] ${text}` },
+          actor.name,
+          undefined,
+          'agent',
+        )
+        if (!comment) return fail('the comment did not land — is the frame gone?')
+        runState.driftFindings = (runState.driftFindings ?? 0) + 1
+        return ok(`posted ${severity} finding ${comment.id} on frame ${frame.id}`)
       }
       case 'report_issue':
       case 'share_feedback': {
