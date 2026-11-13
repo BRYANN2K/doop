@@ -358,6 +358,8 @@ export const tasks = pgTable(
     payload: text('payload'),
     /** JSON CardScope: the frame/element the prompt was scoped to when queued */
     scope: text('scope'),
+    /** JSON ChatPlanReference[]: the library references a plan card carries — set at queue time, never updated */
+    references: text('references'),
     /** comma-joined ids of the frames edited while the task was open, most recent last */
     frameIds: text('frame_ids'),
     /** JSON RunnerPick: the connection and model the composer picked for a card */
@@ -921,6 +923,16 @@ export const webhooks = pgTable(
 export const imagePrefs = pgTable('image_prefs', {
   userId: text('user_id').primaryKey(),
   model: text('model').notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+})
+
+/** The canvases a user designated as their reference library (Settings →
+ *  Agent): the chat run's find_references searches only these, and a plan's
+ *  references must point at frames inside them. Resolved per asker like
+ *  repo_links — a plan is built from the requester's library. */
+export const referenceLibrary = pgTable('reference_library', {
+  userId: text('user_id').primaryKey(),
+  canvasIds: jsonb('canvas_ids').$type<string[]>().notNull(),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
 })
 

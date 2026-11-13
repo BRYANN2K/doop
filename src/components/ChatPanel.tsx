@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { ChatMessage, ChatPlan, ChatPlanScreen } from '../../shared/types'
+import type { ChatMessage, ChatPlan, ChatPlanReference, ChatPlanScreen } from '../../shared/types'
 import { colorFor } from '../../shared/types'
 import { MAX_CHAT_TEXT_CHARS, chatThreadId, isOpenPlan } from '../../shared/chat'
 import { canCommentOpenCanvas, canEditOpenCanvas, useStore } from '../lib/store'
@@ -21,7 +21,7 @@ import { Badge } from './ui/badge'
 import { Avatar } from './ui/avatar'
 import { StatusLabel } from './ui/status-label'
 import { Note } from './ui/note'
-import { ArrowUpIcon, CheckIcon, FolderIcon } from './ui/icons'
+import { ArrowUpIcon, CheckIcon, FolderIcon, XIcon } from './ui/icons'
 import { useT } from '@/lib/i18n'
 
 const emptyNote = 'px-4 py-6 text-center text-body text-ink-faint'
@@ -299,6 +299,19 @@ function PlanCard({ message, plan }: { message: ChatMessage; plan: ChatPlan }) {
                     {t('panels.chatPlanReuse', { items: screen.reuse.join(', ') })}
                   </div>
                 )}
+                {screen.references && screen.references.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {screen.references.map((ref) => (
+                      <PlanReference
+                        key={ref.libraryId}
+                        reference={ref}
+                        removable={open && canEdit}
+                        busy={busy}
+                        onRemove={() => act(() => api.removeChatPlanReference(message.id, i, ref.libraryId))}
+                      />
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -366,6 +379,56 @@ function PlanCard({ message, plan }: { message: ChatMessage; plan: ChatPlan }) {
         </>
       )}
     </Card>
+  )
+}
+
+/** One library reference on a plan card: a thumbnail of the frame the
+ *  screen will build on, its label and ids, a link that opens it — and,
+ *  while the plan is open, the button that drops it from the plan. */
+function PlanReference({
+  reference,
+  removable,
+  busy,
+  onRemove,
+}: {
+  reference: ChatPlanReference
+  removable: boolean
+  busy: boolean
+  onRemove: () => void
+}) {
+  const t = useT()
+  return (
+    <div className="group relative w-24 flex-none overflow-hidden rounded-control bg-paper shadow-ring">
+      <a
+        href={`/c/${reference.canvasId}?frame=${reference.frameId}`}
+        target="_blank"
+        rel="noreferrer"
+        title={`${reference.label} — ${reference.why}`}
+        className="block transition-shadow focus-visible:shadow-elevation-1-focus hover:shadow-elevation-1-hover"
+      >
+        <img
+          src={`/i/${reference.frameId}.jpg?preview`}
+          alt={reference.label}
+          loading="lazy"
+          className="block aspect-[4/3] w-full object-cover object-top"
+        />
+        <span className="block truncate px-1.5 pt-0.5 text-micro font-medium text-ink">{reference.label}</span>
+        <span className="block truncate px-1.5 pb-1 font-mono text-micro text-ink-faint">{reference.frameId}</span>
+      </a>
+      {removable && (
+        <IconButton
+          variant="frosted"
+          shape="round"
+          size="sm"
+          disabled={busy}
+          aria-label={t('panels.chatPlanRemoveReference')}
+          onClick={onRemove}
+          className="absolute top-0.5 right-0.5 size-5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <XIcon size="rail" />
+        </IconButton>
+      )}
+    </div>
   )
 }
 

@@ -11,6 +11,7 @@ import { storedLinkAccess } from '../../shared/canvasRole.ts'
 import type { ComponentDef } from '../../shared/components.ts'
 import type { DesignToken, TokenType } from '../../shared/designTokens.ts'
 import { parseRunnerPick } from '../../shared/agentRunner.ts'
+import { cleanPlanReferences } from '../../shared/chat.ts'
 import { byStack } from '../../shared/frameStack.ts'
 import { unloadHtml } from '../frameHtml.ts'
 import type {
@@ -784,6 +785,18 @@ function runnerField(runner: string | null): Pick<AgentTask, 'runner'> {
   }
 }
 
+/** The library references a plan card carries, or nothing when the row has
+ *  none or they no longer parse. */
+function referencesField(references: string | null): Pick<AgentTask, 'references'> {
+  if (!references) return {}
+  try {
+    const refs = cleanPlanReferences(JSON.parse(references))
+    return refs.length ? { references: refs } : {}
+  } catch {
+    return {}
+  }
+}
+
 /** A structured card's kind + payload, or nothing when the row is a prompt
  *  card or its payload no longer parses (the card then reads as a plain one). */
 function repoCardFields(kind: string | null, payload: string | null): Pick<AgentTask, 'kind' | 'payload'> {
@@ -822,6 +835,7 @@ export function saveTask(canvasId: string, task: AgentTask) {
     kind: task.kind ?? null,
     payload: task.payload ? JSON.stringify(task.payload) : null,
     scope: task.scope ? JSON.stringify(task.scope) : null,
+    references: task.references?.length ? JSON.stringify(task.references) : null,
     frameIds: task.frameIds?.join(',') ?? null,
     runner: task.runner ? JSON.stringify(task.runner) : null,
   }
@@ -1196,6 +1210,7 @@ export async function hydrate(): Promise<Hydrated> {
       ...(row.attachments ? { attachments: row.attachments.split(',').filter(Boolean) } : {}),
       ...repoCardFields(row.kind, row.payload),
       ...scopeField(row.scope),
+      ...referencesField(row.references),
       ...(row.frameIds ? { frameIds: row.frameIds.split(',').filter(Boolean) } : {}),
       ...runnerField(row.runner),
     })

@@ -210,6 +210,7 @@ export const panels: Catalog['panels'] = {
   chatPlanEditScreenOutline: 'O que a tela mostra',
   chatPlanSave: 'Salvar plano',
   chatPlanCancelEdit: 'Voltar',
+  chatPlanRemoveReference: 'Remover esta referência do plano',
 
   promptSendFailed: 'Algo deu errado — tente de novo',
   promptElement: 'elemento',

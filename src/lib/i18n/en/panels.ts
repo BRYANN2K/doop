@@ -209,6 +209,7 @@ export const panels = {
   chatPlanEditScreenOutline: 'What the screen shows',
   chatPlanSave: 'Save plan',
   chatPlanCancelEdit: 'Back',
+  chatPlanRemoveReference: 'Remove this reference from the plan',
 
   promptSendFailed: 'Something went wrong — try again',
   promptElement: 'element',
