@@ -1,5 +1,6 @@
 import { startLocalAgent } from './lib/localAgent'
 import { startLocalRepo } from './lib/localRepo'
+import { startLocalDrift } from './lib/localDrift'
 import { navigate } from './lib/navigate'
 import { useEffect, useRef, useState } from 'react'
 import { Home } from './pages/Home'
@@ -134,6 +135,11 @@ export function App() {
      it starts with the app and stands down on sign-out */
   useEffect(() => {
     if (localAgentUser) return startLocalRepo()
+  }, [localAgentUser])
+  /* the drift bridge answers local-URL capture fetches the same way —
+     the server can never reach the user's machine itself */
+  useEffect(() => {
+    if (localAgentUser) return startLocalDrift()
   }, [localAgentUser])
 
   if (isPending)

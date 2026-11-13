@@ -13,6 +13,7 @@ import { MOD_KEY } from '../lib/keys'
 import { t as translate, useT } from '../lib/i18n'
 import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from './ui/context-menu'
 import { MenuHint } from './ui/menu'
+import { DriftModal } from './DriftModal'
 import { FrameExportModal } from './FrameExportModal'
 import { FrameHistoryModal } from './FrameHistoryModal'
 
@@ -42,6 +43,7 @@ export function FrameContextMenu({
   /* the frames Export… acts on: this one, or the selection it belongs to */
   const [exportFrames, setExportFrames] = useState<Frame[] | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [driftOpen, setDriftOpen] = useState(false)
   const [savingApproval, setSavingApproval] = useState(false)
   /* a right-click inside a multi-selection acts on the whole group */
   const selectedIds = useStore((s) => s.selectedIds)
@@ -160,6 +162,9 @@ export function FrameContextMenu({
         <ContextMenuItem onSelect={() => setExportFrames(groupFrames())}>{t('stage.exportEllipsis')}</ContextMenuItem>
         <ContextMenuItem onSelect={() => setHistoryOpen(true)}>{t('stage.versionHistory')}</ContextMenuItem>
         {!readOnly && (
+          <ContextMenuItem onSelect={() => setDriftOpen(true)}>{t('stage.compareWithUrl')}</ContextMenuItem>
+        )}
+        {!readOnly && (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem
@@ -188,6 +193,7 @@ export function FrameContextMenu({
         <FrameExportModal frame={frame} groupFrames={exportFrames} onClose={() => setExportFrames(null)} />
       )}
       {historyOpen && <FrameHistoryModal frame={frame} onClose={() => setHistoryOpen(false)} />}
+      {driftOpen && <DriftModal frame={frame} onClose={() => setDriftOpen(false)} />}
     </>
   )
 }

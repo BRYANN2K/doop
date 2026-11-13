@@ -4,6 +4,7 @@ import { beginFrameSave } from './frameSaves'
 import type { StackWrite } from '../../shared/frameStack'
 import type { LocalAgentPreference, LocalAgentJob, LocalAgentResult } from '../../shared/localAgent'
 import type { RepoLink, RepoLinkStatus, RepoRequest, RepoResult } from '../../shared/localRepo'
+import type { DriftComparison, DriftFetchRequest, DriftFetchResult } from '../../shared/drift'
 import type { ImageDescriptionMode, ImageDescriptionPreference } from '../../shared/imageDescriptions'
 import type { AgentRunners, RunnerPick, RunnerProvider } from '../../shared/agentRunner'
 import type { CanvasFindResult } from '../../shared/canvasFind'
@@ -13,6 +14,7 @@ import type { WebhookDeliveryResult, WebhookEventType, WebhookInfo } from '../..
 import type { AgentFeedbackKind, AgentFeedbackReport } from '../../shared/agentFeedback'
 import type {
   ActivityItem,
+  AgentTask,
   Canvas,
   CanvasMeta,
   CardScope,
@@ -442,6 +444,25 @@ export const api = {
     }),
   finishLocalRepo: (id: string, deviceId: string, result: RepoResult) =>
     req<{ ok: boolean }>(`/api/local-repo/finish/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ deviceId, ...result }),
+    }),
+  /* drift review: compare a frame with the page shipped at a URL */
+  compareDrift: (frameId: string, url: string) =>
+    req<{ comparison: DriftComparison; shippedFrame: Frame }>(`/api/frames/${frameId}/drift`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+  listDrift: (frameId: string) => req<DriftComparison[]>(`/api/frames/${frameId}/drift`),
+  analyzeDrift: (frameId: string, driftId: string) =>
+    req<AgentTask>(`/api/frames/${frameId}/drift/${driftId}/analyze`, { method: 'POST' }),
+  pollLocalDrift: (deviceId: string) =>
+    req<{ request: DriftFetchRequest | null }>('/api/local-drift/poll', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId }),
+    }),
+  finishLocalDrift: (id: string, deviceId: string, result: DriftFetchResult) =>
+    req<{ ok: boolean }>(`/api/local-drift/finish/${id}`, {
       method: 'POST',
       body: JSON.stringify({ deviceId, ...result }),
     }),
