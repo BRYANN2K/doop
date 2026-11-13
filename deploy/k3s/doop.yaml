@@ -18,6 +18,9 @@ metadata:
   namespace: doop
 spec:
   replicas: 1
+  # one pod at a time: the data volume is ReadWriteOnce
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: doop
@@ -53,6 +56,10 @@ spec:
                   key: SIGNUP_EMAIL_DOMAINS
           ports:
             - containerPort: 4400
+          # uploaded assets, thumbnails and backgrounds live in /app/data (no S3)
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
           readinessProbe:
             httpGet:
               path: /healthz
@@ -71,3 +78,19 @@ spec:
               cpu: 100m
             limits:
               memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: doop-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: doop-data
+  namespace: doop
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
