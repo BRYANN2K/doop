@@ -49,6 +49,9 @@ import { Tooltip } from './ui/tooltip'
 import { CodeIcon, CommentIcon, EditIcon, EyeClosedIcon, GithubIcon, LockIcon, SyncIcon, SparkIcon } from './ui/icons'
 import { isSyncedFrame } from '../lib/sync'
 import { isGithubFrame, isGithubPlaceholder } from '../lib/github'
+import { isLiveFrame, liveFrameReload, liveFrameUrl } from '../../shared/liveFrame'
+import { canRenderLiveFrame, onLiveFrameReload } from '../lib/liveFrame'
+import { LiveFrameBadge } from './LiveFrameBadge'
 import { AgentIcon } from './AgentIcon'
 import { ElementResizeHandles, type ElementGeometry } from './ElementResizeHandles'
 import { selectionBox } from '../lib/elementRotate'
@@ -851,6 +854,27 @@ export const FrameView = memo(function FrameView({
     setWasMounted(mounted)
     if (!mounted) setRuntimeReady(false)
   }
+
+  /* a live frame's stored HTML is only the placeholder card: the desktop
+     shell mounts the dev page itself (same machine, so the frame's iframe can
+     reach it), every other surface renders the card. `liveUrl` is the marker
+     re-validated, `isLive` the marker alone — a hand-edited frame with a bad
+     URL is still live-shaped, just never mounted. No bootstrap ever runs in
+     the live iframe, so `runtimeReady` stays false and every runtime feature
+     (probing, inline edit, key relay) skips it by itself */
+  const isLive = useMemo(() => isLiveFrame(frame.html), [frame.html])
+  const liveUrl = useMemo(() => liveFrameUrl(frame.html), [frame.html])
+  const liveMounted = mounted && !!liveUrl && canRenderLiveFrame()
+  /* bumping the tick remounts the live iframe — the only "reload" that works
+     on a document this app did not write */
+  const [liveTick, setLiveTick] = useState(0)
+  useEffect(() => onLiveFrameReload(frame.id, () => setLiveTick((n) => n + 1)), [frame.id])
+  const liveAutoReload = useMemo(() => (isLive ? liveFrameReload(frame.html) : 0), [isLive, frame.html])
+  useEffect(() => {
+    if (!liveMounted || !liveAutoReload) return
+    const timer = window.setInterval(() => setLiveTick((n) => n + 1), liveAutoReload * 1000)
+    return () => window.clearInterval(timer)
+  }, [liveMounted, liveAutoReload])
   useEffect(() => {
     if (mounted) return
     /* nothing of the old document survives: the next one gets the full HTML */
@@ -1454,12 +1478,13 @@ export const FrameView = memo(function FrameView({
   }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- inline text editing ---- */
-  const canEdit = !!frame.html && !stream && !frame.locked && !readOnly && !/<script/i.test(frame.html)
+  const canEdit = !!frame.html && !stream && !frame.locked && !readOnly && !isLive && !/<script/i.test(frame.html)
 
   async function enterElementEdit(where: { x: number; y: number } | { selector: string }) {
     if (
       !runtimeReady ||
       !frame.html ||
+      isLive ||
       stream ||
       frame.locked ||
       readOnly ||
@@ -1781,6 +1806,7 @@ export const FrameView = memo(function FrameView({
                   </span>
                 </Tooltip>
               )}
+              {isLive && <LiveFrameBadge frame={frame} />}
               <span className="min-w-0 overflow-hidden text-ellipsis">{frame.name}</span>
               <FrameApprovalBadge frame={frame} />
               <span className="flex shrink-0 gap-1 @max-[180px]/title:order-first">
@@ -1895,36 +1921,62 @@ export const FrameView = memo(function FrameView({
             onPointerLeave={leaveHover}
           >
             {mounted ? (
-              <iframe
-                ref={iframeRef}
-                className="relative block border-none bg-transparent"
-                title={frame.name}
-                data-doop-frame=""
-                sandbox="allow-scripts"
-                srcDoc={FRAME_BOOTSTRAP}
-                /* The world is laid out at CSS zoom k (Stage), which an iframe
-                 passes into its document. Chromium takes it as pixel density:
-                 the document keeps its design-px viewport and rasterizes at
-                 k×, even out of process, where a transform on this element
-                 would only stretch a 1× raster. WebKit instead lays the
-                 document out at the zoomed width, so there the zoom is undone
-                 here (keeping viewport, vh/vw, media queries and runtime rects
-                 in design px) and the scale restores the box. */
-                style={{
-                  width: frame.width,
-                  height: frame.height,
-                  ...(FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY
-                    ? null
-                    : { zoom: counterZoom(layoutZoom), transform: `scale(${layoutZoom})` }),
-                  transformOrigin: '0 0',
-                  /* Chromium paints an opaque backdrop behind an iframe whose
-                   colour scheme differs from its document's; the page's dark
-                   scheme reaches this element by inheritance while a
-                   standalone element's document is light, so a shape on the
-                   dark canvas sat on a white square */
-                  ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
-                }}
-              />
+              liveMounted ? (
+                <iframe
+                  key={liveTick}
+                  className="relative block border-none bg-transparent"
+                  title={frame.name}
+                  data-doop-live=""
+                  /* the dev page needs its own origin to work (cookies, fetches,
+                     module imports); every other frame keeps the opaque-origin
+                     srcDoc. `src` is the marker's URL validated by liveFrameUrl,
+                     so only loopback pages can ever mount here */
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  src={liveUrl}
+                  /* the same box math as the document iframe next to it: design
+                     pixels, the world's zoom applied the way each engine wants */
+                  style={{
+                    width: frame.width,
+                    height: frame.height,
+                    ...(FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY
+                      ? null
+                      : { zoom: counterZoom(layoutZoom), transform: `scale(${layoutZoom})` }),
+                    transformOrigin: '0 0',
+                    ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
+                  }}
+                />
+              ) : (
+                <iframe
+                  ref={iframeRef}
+                  className="relative block border-none bg-transparent"
+                  title={frame.name}
+                  data-doop-frame=""
+                  sandbox="allow-scripts"
+                  srcDoc={FRAME_BOOTSTRAP}
+                  /* The world is laid out at CSS zoom k (Stage), which an iframe
+                   passes into its document. Chromium takes it as pixel density:
+                   the document keeps its design-px viewport and rasterizes at
+                   k×, even out of process, where a transform on this element
+                   would only stretch a 1× raster. WebKit instead lays the
+                   document out at the zoomed width, so there the zoom is undone
+                   here (keeping viewport, vh/vw, media queries and runtime rects
+                   in design px) and the scale restores the box. */
+                  style={{
+                    width: frame.width,
+                    height: frame.height,
+                    ...(FRAME_DOCUMENTS_TAKE_ZOOM_AS_DENSITY
+                      ? null
+                      : { zoom: counterZoom(layoutZoom), transform: `scale(${layoutZoom})` }),
+                    transformOrigin: '0 0',
+                    /* Chromium paints an opaque backdrop behind an iframe whose
+                     colour scheme differs from its document's; the page's dark
+                     scheme reaches this element by inheritance while a
+                     standalone element's document is light, so a shape on the
+                     dark canvas sat on a white square */
+                    ...(isCanvasElement(frame.html) ? { colorScheme: 'light' } : null),
+                  }}
+                />
+              )
             ) : lod === 'image' && frame.html ? (
               /* the server's render of the current design (frameImageUrl):
                  one decoded bitmap instead of a whole document. The world's
@@ -1949,8 +2001,9 @@ export const FrameView = memo(function FrameView({
                 )}
               </div>
             )}
-            {/* a standalone element is see-through: the paper's grid shows */}
-            {mounted && !isCanvasElement(frame.html) && <PixelGrid layoutZoom={layoutZoom} />}
+            {/* a standalone element is see-through: the paper's grid shows —
+                not over a live frame, whose placeholder is not artwork */}
+            {mounted && !isLive && !isCanvasElement(frame.html) && <PixelGrid layoutZoom={layoutZoom} />}
             {!frame.html && !frame.htmlDeferred && (
               <div className="absolute inset-0 grid place-items-center bg-[repeating-linear-gradient(45deg,transparent_0_10px,rgba(28,26,21,0.025)_10px_20px)] text-[13px] text-ink-faint">
                 empty frame — add HTML
