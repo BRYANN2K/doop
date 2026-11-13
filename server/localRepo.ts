@@ -95,6 +95,9 @@ interface Pending {
   op: RepoOp
   args: RepoRequest['args']
   createdAt: number
+  /** how long the request may wait — write_change outlives reads, its
+   *  native confirmation dialog can sit open on the device */
+  ttl: number
   /** the device the request was handed to */
   claimedBy?: string
   resolve: (result: RepoResult) => void
@@ -166,7 +169,13 @@ export class LocalRepo {
    * Fails fast when no polling device claims the link — the desktop app is
    * closed or holds another install's grants.
    */
-  repoRequest(userId: string, linkId: string, op: RepoOp, args: RepoRequest['args']): Promise<RepoResult> {
+  repoRequest(
+    userId: string,
+    linkId: string,
+    op: RepoOp,
+    args: RepoRequest['args'],
+    ttlMs: number = REPO_REQUEST_TTL_MS,
+  ): Promise<RepoResult> {
     const device = this.devices.get(userId)
     if (!device || !this.online(userId) || !device.grants.has(linkId)) {
       return Promise.resolve({
@@ -181,6 +190,7 @@ export class LocalRepo {
       op,
       args,
       createdAt: Date.now(),
+      ttl: ttlMs,
       resolve: () => {},
     }
     this.pending.set(p.id, p)
@@ -202,7 +212,7 @@ export class LocalRepo {
               ok: false,
               error: 'the linked project did not answer in time — is the desktop app still open?',
             }),
-          REPO_REQUEST_TTL_MS,
+          p.ttl,
         ).unref(),
       ),
     ]).then((result) => {
@@ -223,7 +233,7 @@ export class LocalRepo {
   /** Resolve unanswered requests and drop devices that stopped polling. */
   expire(now = Date.now()): void {
     for (const [id, p] of this.pending) {
-      if (now - p.createdAt > REPO_REQUEST_TTL_MS) {
+      if (now - p.createdAt > p.ttl) {
         this.pending.delete(id)
         p.resolve({ ok: false, error: 'the linked project did not answer in time' })
       }
@@ -244,14 +254,15 @@ export const localRepo = new LocalRepo()
 const cleanup = setInterval(() => localRepo.expire(), 5_000)
 cleanup.unref()
 
-/** Agent-side call: dispatch the read to the device and stamp the link used. */
+/** Agent-side call: dispatch the request to the device and stamp the link used. */
 export async function repoToolCall(
   userId: string,
   link: RepoLink,
   op: RepoOp,
   args: RepoRequest['args'],
+  ttlMs?: number,
 ): Promise<RepoResult> {
-  const result = await localRepo.repoRequest(userId, link.id, op, args)
+  const result = await localRepo.repoRequest(userId, link.id, op, args, ttlMs)
   if (result.ok) void touchLink(link.id).catch(() => {})
   return result
 }

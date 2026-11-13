@@ -27,7 +27,15 @@ import type { CommentAnchorInput } from '../shared/comments.ts'
 import type { LocaleConfig } from '../shared/locales.ts'
 import { FIRST_CANVAS_PATH, SIGNUP_PARAM, parseSignupMethod } from '../shared/firstCanvas.ts'
 import { localAgentRouter, handleLocalAgentMcp, wake as wakeUserWork } from './localAgent.ts'
-import { deleteLink, linkFor, localRepo, localRepoRouter, putLink } from './localRepo.ts'
+import { deleteLink, linkFor, localRepo, localRepoRouter, putLink, repoToolCall } from './localRepo.ts'
+import { buildHandoffPack, HandoffError } from './handoff.ts'
+import {
+  handoffFilesProblem,
+  HANDOFF_MAX_FILE_BYTES,
+  HANDOFF_MAX_FILES,
+  type HandoffWriteResult,
+} from '../shared/handoff.ts'
+import { REPO_WRITE_TTL_MS, type RepoReadResult } from '../shared/localRepo.ts'
 import { handleGeminiCloudMcp } from './geminiCloudMcp.ts'
 import { geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import http from 'node:http'
@@ -1081,6 +1089,85 @@ app.delete('/api/canvases/:id/repo', async (req, res) => {
   const c = requireCanvas(req, res, req.params.id, 'edit')
   if (!c) return
   res.json({ ok: await deleteLink(req.user!.id, c.id) })
+})
+
+/* ---- Ready for dev → Stip. The server drafts a Stip change pack from
+   frames and/or a plan card and hands it back for preview; the write rides
+   the same poll bridge as reads and lands through the desktop app's one
+   write command, repo_write_change — which re-checks the sandbox natively
+   and asks on-screen before creating anything. */
+
+const handoffBuildSchema = z.object({
+  frameIds: z.array(z.string().max(80)).max(24).optional(),
+  planMessageId: z.string().max(100).optional(),
+  title: z.string().max(200).optional(),
+})
+
+app.post('/api/canvases/:id/handoff', async (req, res) => {
+  const c = requireCanvas(req, res, req.params.id, 'view')
+  if (!c) return
+  const parsed = handoffBuildSchema.safeParse(req.body ?? {})
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid handoff request' })
+  try {
+    const link = await linkFor(req.user!.id, c.id)
+    const device = localRepo.deviceFor(req.user!.id)
+    const writable = !!link && !!device && device.grants.has(link.id)
+    /* state.json's target_before hashes an existing spec when the device can
+       look — best effort, reads already have their own caps */
+    const readRepo = writable
+      ? async (paths: string[]) => {
+          const r = await repoToolCall(req.user!.id, link!, 'read', { paths })
+          return r.ok ? (r.result as RepoReadResult) : undefined
+        }
+      : undefined
+    const pack = await buildHandoffPack(c.id, { ...parsed.data, requesterId: req.user!.id, readRepo })
+    res.json({ pack, link: link ? { name: link.name } : null, writable })
+  } catch (e) {
+    if (e instanceof HandoffError) return res.status(e.status).json({ error: e.message })
+    throw e
+  }
+})
+
+const handoffWriteSchema = z.object({
+  changeId: z.string().max(120),
+  files: z
+    .array(
+      z.object({
+        path: z.string().max(600),
+        text: z
+          .string()
+          .max(HANDOFF_MAX_FILE_BYTES + 100)
+          .optional(),
+        base64: z
+          .string()
+          .max(HANDOFF_MAX_FILE_BYTES * 2)
+          .optional(),
+      }),
+    )
+    .max(HANDOFF_MAX_FILES + 8),
+})
+
+app.post('/api/canvases/:id/handoff/write', async (req, res) => {
+  const c = requireCanvas(req, res, req.params.id, 'edit')
+  if (!c) return
+  const parsed = handoffWriteSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid write request' })
+  const { changeId, files } = parsed.data
+  const bad = handoffFilesProblem(changeId, files)
+  if (bad) return res.status(400).json({ error: bad })
+  try {
+    const link = await linkFor(req.user!.id, c.id)
+    if (!link) return res.status(409).json({ error: 'no linked project — link this canvas to a folder first' })
+    const result = await repoToolCall(req.user!.id, link, 'write_change', { changeId, files }, REPO_WRITE_TTL_MS)
+    if (!result.ok) {
+      if (result.error === 'cancelled') return res.status(409).json({ error: 'cancelled' })
+      return res.status(502).json({ error: result.error ?? 'the write failed' })
+    }
+    res.json({ ok: true, result: result.result as HandoffWriteResult })
+  } catch (e) {
+    if (e instanceof HandoffError) return res.status(e.status).json({ error: e.message })
+    throw e
+  }
 })
 
 app.use('/api/admin', adminRouter)
