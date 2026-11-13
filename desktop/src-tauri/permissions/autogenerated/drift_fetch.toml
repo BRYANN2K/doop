@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-drift-fetch"
+description = "Enables the drift_fetch command without any pre-configured scope."
+commands.allow = ["drift_fetch"]
+
+[[permission]]
+identifier = "deny-drift-fetch"
+description = "Denies the drift_fetch command without any pre-configured scope."
+commands.deny = ["drift_fetch"]

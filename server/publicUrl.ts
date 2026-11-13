@@ -246,6 +246,10 @@ export async function guardPublicPageRequests(
     allowUrl?: (url: URL) => boolean
     fetchUrl?: typeof fetchPinnedPublicUrl
     offNetwork?: boolean
+    /** local-URL captures proxied through the owner's desktop: the boundary
+     *  is the origin pin inside the bridged fetchUrl, not the public-address
+     *  rules — localhost is precisely what the desktop can reach */
+    privateHosts?: boolean
   } = {},
 ): Promise<void> {
   const fetchUrl = options.fetchUrl ?? fetchPinnedPublicUrl
@@ -270,7 +274,7 @@ export async function guardPublicPageRequests(
           await request.continue()
           return
         }
-        parsePublicHttpUrl(raw)
+        if (!options.privateHosts) parsePublicHttpUrl(raw)
         if (offNetwork) {
           await request.continue()
           return

@@ -37,7 +37,9 @@ regex = "1"
 base64 = "0.22"
 # The check that a server picked in the app is a Doop server (src/server.rs);
 # the same reqwest and ring-backed rustls the updater already links.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+# drift_fetch's bodies cross the IPC bridge base64 (src/drift.rs)
+base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Repositioning the traffic lights over the web app's tab strip (main.rs);

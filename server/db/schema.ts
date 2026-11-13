@@ -5,6 +5,7 @@ import {
   bigint,
   boolean,
   integer,
+  real,
   index,
   uniqueIndex,
   primaryKey,
@@ -1057,6 +1058,29 @@ export const agentFeedback = pgTable(
     userId: text('user_id'),
   },
   (t) => [index('agent_feedback_at_idx').on(t.at)],
+)
+
+/** One designed-vs-shipped comparison (shared/drift.ts): the URL that was
+ *  compared against a frame, the capture frame it produced, and the pixel
+ *  score. Written by the UI action, the MCP tool and the CI webhook alike. */
+export const driftComparisons = pgTable(
+  'drift_comparisons',
+  {
+    id: text('id').primaryKey(),
+    canvasId: text('canvas_id').notNull(),
+    frameId: text('frame_id').notNull(),
+    shippedFrameId: text('shipped_frame_id'),
+    url: text('url').notNull(),
+    finalUrl: text('final_url'),
+    score: real('score'),
+    diffPixels: integer('diff_pixels'),
+    totalPixels: integer('total_pixels'),
+    via: text('via').notNull(),
+    source: text('source').notNull(),
+    requestedBy: text('requested_by').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (t) => [index('drift_comparisons_frame_idx').on(t.frameId)],
 )
 
 /** The instance's sign-in policy (shared/instanceSettings.ts): one row, id

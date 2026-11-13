@@ -51,6 +51,7 @@ mod appimage;
 mod claude;
 mod claude_extension;
 mod codex;
+mod drift;
 mod fonts;
 mod live;
 mod repo;
@@ -332,6 +333,7 @@ fn main() {
             claude::claude_stop,
             claude_extension::claude_add_extension,
             codex::codex_add_mcp,
+            drift::drift_fetch,
             fonts::fonts_choose_local,
             fonts::fonts_read_local,
             repo::repo_choose,
@@ -433,7 +435,7 @@ fn main() {
             // (traffic-light inset arrived with the overlay title bar, 0.1.2)
             // and the platform tells it which window framing it lives under.
             let desktop_marker = format!(
-                "window.__DOOP_DESKTOP__ = '{}'; window.__DOOP_DESKTOP_PLATFORM__ = '{}'; window.__DOOP_CLAUDE_CLI__ = true; window.__DOOP_CLAUDE_INSTALL__ = true; window.__DOOP_CLAUDE_CHOOSE__ = true; window.__DOOP_CLAUDE_EXTENSION__ = {}; window.__DOOP_CODEX_SETUP__ = true; window.__DOOP_VIEW_MENU__ = true; window.__DOOP_APP_MENU__ = {}; window.__DOOP_LOCAL_FONTS__ = true; window.__DOOP_LOCAL_REPO__ = true; window.__DOOP_LIVE_SNAPSHOT__ = true; window.__DOOP_UPDATE_CARD__ = true; window.__DOOP_SERVER_CHOOSE__ = true;",
+                "window.__DOOP_DESKTOP__ = '{}'; window.__DOOP_DESKTOP_PLATFORM__ = '{}'; window.__DOOP_CLAUDE_CLI__ = true; window.__DOOP_CLAUDE_INSTALL__ = true; window.__DOOP_CLAUDE_CHOOSE__ = true; window.__DOOP_CLAUDE_EXTENSION__ = {}; window.__DOOP_CODEX_SETUP__ = true; window.__DOOP_VIEW_MENU__ = true; window.__DOOP_APP_MENU__ = {}; window.__DOOP_LOCAL_FONTS__ = true; window.__DOOP_LOCAL_REPO__ = true; window.__DOOP_LOCAL_DRIFT__ = true; window.__DOOP_LIVE_SNAPSHOT__ = true; window.__DOOP_UPDATE_CARD__ = true; window.__DOOP_SERVER_CHOOSE__ = true;",
                 app.package_info().version,
                 std::env::consts::OS,
                 cfg!(any(target_os = "macos", target_os = "windows")),
