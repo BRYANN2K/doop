@@ -37,16 +37,14 @@ export interface LiveUrl {
 function loopbackHost(hostname: string): boolean {
   const host = hostname.replace(/\.$/, '').toLowerCase()
   if (host === 'localhost' || host.endsWith('.localhost')) return true
-  /* `[::1]` comes back bracketed from URL#hostname; 127.0/8 arrives already
-     normalized by the parser (hex, octal and integer forms included), which
-     is why no string check would do */
-  if (host === '[::1]' || host === '::1') return true
+  /* 127.0.0.0/8 arrives already normalized by the parser (hex, octal and
+     integer forms included), which is why no string check would do */
   return host.startsWith('127.') && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
 }
 
 /**
  * The URL a live frame may point at: http(s) on this machine only — `localhost`,
- * `*.localhost`, `127.0/8` or `[::1]`, any explicit port, no credentials.
+ * `*.localhost` or `127.0/8`, any explicit port, no credentials.
  * Everything else (a LAN IP, a public host, `file:`, `javascript:`) answers
  * null. `parseLiveUrl` is the one gate used by the client iframe mount, the
  * MCP tool and the dialog; `live.rs` re-checks the same rules in Rust before
@@ -62,7 +60,7 @@ export function parseLiveUrl(raw: string): LiveUrl | null {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   if (url.username || url.password) return null
   if (!loopbackHost(url.hostname)) return null
-  const host = url.port ? `${url.hostname === '[::1]' ? '[::1]' : url.hostname}:${url.port}` : url.hostname
+  const host = url.port ? `${url.hostname}:${url.port}` : url.hostname
   return { url: url.href, host }
 }
 

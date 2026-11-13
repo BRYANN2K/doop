@@ -204,7 +204,7 @@ export const canvas: Catalog['canvas'] = {
   liveFrameLede:
     'Aponte um frame para uma página que seu servidor de dev está rodando — ele fica ao vivo ao lado dos mockups, no app de desktop.',
   liveFrameUrl: 'URL do servidor de dev',
-  liveFrameUrlInvalid: 'Somente http(s) em localhost, 127.x.x.x ou [::1] — ex.: http://localhost:4321/contact',
+  liveFrameUrlInvalid: 'Somente http(s) em localhost, ou 127.x.x.x — ex.: http://localhost:4321/contact',
   liveFrameWidth: 'Largura',
   liveFrameHeight: 'Altura',
   liveFrameNote:

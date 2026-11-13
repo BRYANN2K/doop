@@ -211,7 +211,7 @@ export const canvas = {
   liveFrameLede:
     'Point a frame at a page your dev server is running — it stays live next to your mockups, in the desktop app.',
   liveFrameUrl: 'Dev-server URL',
-  liveFrameUrlInvalid: 'Only http(s) on localhost, 127.x.x.x or [::1] — e.g. http://localhost:4321/contact',
+  liveFrameUrlInvalid: 'Only http(s) on localhost, or 127.x.x.x — e.g. http://localhost:4321/contact',
   liveFrameWidth: 'Width',
   liveFrameHeight: 'Height',
   liveFrameNote: 'The page renders live in the Doop desktop app only; everywhere else the frame shows a placeholder.',

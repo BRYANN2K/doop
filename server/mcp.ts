@@ -1506,7 +1506,7 @@ export function buildMcpServer(
     {
       title: 'Create a live dev-server frame',
       description:
-        "Create a frame that renders a page from the person's own dev server (e.g. http://localhost:4321/contact) live, next to the mockups. The URL must be loopback — localhost, 127.x.x.x or [::1] over http(s); anything else is rejected and nothing is fetched server-side. The page renders live only inside the Doop desktop app (the same machine hosts the server); web viewers and server screenshots see the frame's placeholder card. Use create_frame for ordinary designs.",
+        "Create a frame that renders a page from the person's own dev server (e.g. http://localhost:4321/contact) live, next to the mockups. The URL must be loopback — localhost or 127.x.x.x over http(s); anything else is rejected and nothing is fetched server-side. The page renders live only inside the Doop desktop app (the same machine hosts the server); web viewers and server screenshots see the frame's placeholder card. Use create_frame for ordinary designs.",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       inputSchema: {
         canvas_id: z.string(),
@@ -1524,7 +1524,7 @@ export function buildMcpServer(
       if (!live) {
         return text({
           ok: false,
-          error: 'not a loopback URL — a live frame only accepts http(s) on localhost, 127.x.x.x or [::1]',
+          error: 'not a loopback URL — a live frame only accepts http(s) on localhost or 127.x.x.x',
         })
       }
       const frame = actions.createFrame(

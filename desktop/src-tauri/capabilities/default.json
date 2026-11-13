@@ -40,6 +40,7 @@
     "allow-repo-list",
     "allow-repo-read",
     "allow-repo-search",
+    "allow-live-snapshot",
     "allow-server-status",
     "allow-server-choose",
     "allow-view-menu-state",

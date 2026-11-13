@@ -28,6 +28,8 @@ fn main() {
             "repo_list",
             "repo_read",
             "repo_search",
+            "live_snapshot",
+            "live_snapshot_done",
             "server_status",
             "server_choose",
             "view_menu_state",

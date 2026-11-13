@@ -18,7 +18,6 @@ describe('parseLiveUrl', () => {
     expect(parseLiveUrl('https://localhost')?.host).toBe('localhost')
     expect(parseLiveUrl('http://app.localhost:3000')?.host).toBe('app.localhost:3000')
     expect(parseLiveUrl('http://127.0.0.1:8080/a?b=c')?.url).toBe('http://127.0.0.1:8080/a?b=c')
-    expect(parseLiveUrl('http://[::1]:5173')?.url).toBe('http://[::1]:5173/')
     /* the URL parser normalizes the sneaky spellings of 127.0.0.1 before the
        host is checked — no string check could catch them all */
     expect(parseLiveUrl('http://2130706433:3000')?.url).toBe('http://127.0.0.1:3000/')
@@ -36,6 +35,7 @@ describe('parseLiveUrl', () => {
       'http://192.168.1.20:3000',
       'http://10.0.0.4',
       'http://0.0.0.0:3000',
+      'http://[::1]:5173',
       'http://0x80000001',
       'file:///etc/hosts',
       'javascript:alert(1)',
@@ -50,7 +50,6 @@ describe('parseLiveUrl', () => {
   it('keeps the explicit port in the badge label, hides the default one', () => {
     expect(parseLiveUrl('http://localhost:4321/contact')?.host).toBe('localhost:4321')
     expect(parseLiveUrl('http://localhost:80')?.host).toBe('localhost')
-    expect(parseLiveUrl('http://[::1]:5173')?.host).toBe('[::1]:5173')
   })
 })
 

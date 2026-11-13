@@ -28,7 +28,7 @@ rfd = "0.16"
 # Self-update from the signed feed in tauri.conf.json (src/updates.rs); tokio
 # only for the timer between scheduled checks.
 tauri-plugin-updater = "2"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 # Local-project reads (src/repo.rs): link ids are uuids; repo_search's
 # `regex` arg takes a Rust-regex pattern.
 uuid = { version = "1", features = ["v4"] }
