@@ -1,3 +1,4 @@
+import { findInCanvas } from './canvasFind.ts'
 import { env } from './env.ts'
 import { MAX_DECISION_CHARS } from '../shared/designDecisions.ts'
 import packageJson from '../package.json' with { type: 'json' }
@@ -520,6 +521,54 @@ export function buildMcpServer(
           guidelinesCount: store.getGuidelines(m.id).length,
         })),
       ),
+  )
+
+  server.registerTool(
+    'find_in_canvas',
+    {
+      title: 'Find in a canvas (all pages)',
+      description:
+        "Search frames for a term across every page of one canvas, or of every canvas the user can open when canvas_id is omitted — the same search as ⌘F with All pages. Matches frame names, the text a person reads in the frame, and string literals in its scripts (library sheets often render their items from a JS array, so ids like cp.scb-input-otp live there). Use it to answer 'find the OTP designs' instead of paging through get_canvas. Results come in reading order (page, then top to bottom), each with its frame id, page and a snippet; open one with get_frame or link it as /c/<canvas>?frame=<frame>.",
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        query: z.string().min(1).max(200).describe('The term to find, e.g. "OTP" or "cp.vui-otp-input"'),
+        canvas_id: z.string().optional().describe('One canvas; omit to search every canvas the user can open'),
+        match_case: z.boolean().optional(),
+        limit: z.number().int().min(1).max(500).optional().describe('Max hits returned (default 100)'),
+      },
+    },
+    async ({ query, canvas_id, match_case, limit }) => {
+      const max = limit ?? 100
+      const ids = canvas_id ? [canvas_id] : workspaces.canvasesFor(ownerId ?? '').map((m) => m.id)
+      const out: Array<Record<string, unknown>> = []
+      let total = 0
+      let frames = 0
+      for (const id of ids) {
+        const c = canvasFor(id, 'view')
+        if (!c) {
+          if (canvas_id) return noCanvas(canvas_id)
+          continue
+        }
+        const r = findInCanvas(c, query, { matchCase: !!match_case })
+        total += r.total
+        frames += r.frames
+        for (const h of r.hits) {
+          if (out.length >= max) break
+          out.push({
+            canvas_id: c.id,
+            canvas_name: c.name,
+            frame_id: h.frameId,
+            frame_name: h.frameName,
+            page_id: h.pageId,
+            page_name: h.pageName,
+            where: h.where,
+            snippet: `${h.before}[${h.text}]${h.after}`,
+            url: `/c/${c.id}?frame=${h.frameId}`,
+          })
+        }
+      }
+      return text({ query, total, frames, returned: out.length, hits: out })
+    },
   )
 
   /* ChatGPT shows this when several Doop accounts are connected — the
