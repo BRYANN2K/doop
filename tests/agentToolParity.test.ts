@@ -42,6 +42,8 @@ const MISSING = [
   'upload_asset',
   'list_linear_issues', // integration tools, registered by their connections
   'get_linear_issue',
+  'create_handoff', // the ready-for-dev pack lives behind the UI's write flow
+  'find_in_canvas', // the resident searches by reading frames, not the ⌘F index
 ]
 
 async function mcpToolNames(): Promise<string[]> {
