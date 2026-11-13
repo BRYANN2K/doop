@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm'
 import { db } from './db/index.ts'
 import * as authSchema from './db/auth-schema.ts'
 import { canvasPages, framePageId, MAX_PAGE_NAME } from '../shared/pages.ts'
+import { liveFrameHtml, parseLiveUrl } from '../shared/liveFrame.ts'
 import { normalizePageBackground } from '../shared/pageBackground.ts'
 import { prototypeReport, prototypeUrl, setPrototypeStart } from './prototypeTools.ts'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -1494,6 +1495,60 @@ export function buildMcpServer(
       )
       return withGuidelinesNudge(
         withStatusNudge(withFeedback(result, canvas_id, actorFrom(agent_name)), canvas_id, actorFrom(agent_name)),
+        canvas_id,
+        actorFrom(agent_name),
+      )
+    },
+  )
+
+  server.registerTool(
+    'create_live_frame',
+    {
+      title: 'Create a live dev-server frame',
+      description:
+        "Create a frame that renders a page from the person's own dev server (e.g. http://localhost:4321/contact) live, next to the mockups. The URL must be loopback — localhost, 127.x.x.x or [::1] over http(s); anything else is rejected and nothing is fetched server-side. The page renders live only inside the Doop desktop app (the same machine hosts the server); web viewers and server screenshots see the frame's placeholder card. Use create_frame for ordinary designs.",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      inputSchema: {
+        canvas_id: z.string(),
+        pageId: z.string().optional().describe('Target page ID from get_canvas; defaults to the first page'),
+        url: z.string().describe('Loopback URL of the page, e.g. http://localhost:4321/contact'),
+        name: z.string().optional().describe('Frame title; defaults to the URL’s host and path'),
+        width: z.number().optional().describe('Default 1280'),
+        height: z.number().optional().describe('Default 800'),
+        agent_name: agentName,
+      },
+    },
+    async ({ canvas_id, pageId, url, name, width, height, agent_name }) => {
+      if (!canvasFor(canvas_id, 'edit')) return noCanvas(canvas_id)
+      const live = parseLiveUrl(url)
+      if (!live) {
+        return text({
+          ok: false,
+          error: 'not a loopback URL — a live frame only accepts http(s) on localhost, 127.x.x.x or [::1]',
+        })
+      }
+      const frame = actions.createFrame(
+        canvas_id,
+        {
+          name: name ?? live.host + new URL(live.url).pathname.replace(/\/$/, ''),
+          pageId,
+          html: liveFrameHtml(live.url),
+          width: width ?? 1280,
+          height: height ?? 800,
+        },
+        actorFrom(agent_name),
+      )
+      if (!frame) return noCanvas(canvas_id)
+      return withStatusNudge(
+        withFeedback(
+          text({
+            ok: true,
+            frame: frameSummary(frame),
+            note: 'The page renders live in the Doop desktop app; the frame shows its placeholder on the web.',
+          }),
+          canvas_id,
+          actorFrom(agent_name),
+        ),
         canvas_id,
         actorFrom(agent_name),
       )
