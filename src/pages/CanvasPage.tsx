@@ -52,6 +52,7 @@ import { pageFrames } from '../../shared/pages'
 import type { Frame } from '../../shared/types'
 import { ImportStepFooter, ImportStepHeader, SourcePicker } from '../components/ImportSources'
 import { importSources } from '../components/importSourceList'
+import { LiveFrameSection } from '../components/LiveFrameSection'
 import { PresentMode } from '../components/PresentMode'
 import { CommandPalette } from '../components/CommandPalette'
 import { MainMenu } from '../components/MainMenu'
@@ -1767,6 +1768,12 @@ function ImportModal({
               </>
             ) : source === 'liveapp' ? (
               <SyncKeysSection canvasId={canvasId} onBack={() => setSource(null)} />
+            ) : source === 'live' ? (
+              <LiveFrameSection
+                canvasId={canvasId}
+                onBack={() => setSource(null)}
+                onCreated={(frame) => onDone([frame.id], 0)}
+              />
             ) : source === 'github' ? (
               <GithubSection
                 canvasId={canvasId}

@@ -311,6 +311,7 @@ export type AppIconBrand =
   | 'canva'
   | 'website'
   | 'live-app'
+  | 'live-frame'
   | 'pdf'
   | 'png'
   | 'jpg'
@@ -401,6 +402,9 @@ const APP_TILES: Record<AppIconBrand, AppTile> = {
   },
   website: { tile: '#0177d3', art: chromeGlyph(WebIcon) },
   'live-app': { tile: '#1f9d55', art: chromeGlyph(RadioTowerIcon) },
+  /* a dev-server frame: the live signal on the brand's blue, not the sync
+     flow's green */
+  'live-frame': { tile: '#0177d3', art: chromeGlyph(RadioTowerIcon) },
   pdf: { tile: '#e5322d', art: chromeGlyph(PdfIcon) },
   png: { tile: '#6e56cf', art: chromeGlyph(ImageIcon) },
   jpg: { tile: '#0891b2', art: chromeGlyph(ImageIcon) },
