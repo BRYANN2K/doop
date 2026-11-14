@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: doop
-          image: ghcr.io/bryann2k/doop:bryan-main
+          image: ghcr.io/bryann2k/doop:bryann2k-main
           imagePullPolicy: Always
           env:
             - name: DATABASE_URL

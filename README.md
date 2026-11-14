@@ -63,6 +63,64 @@ runs on **GPT, Claude, Gemini, DeepSeek, Kimi or Qwen** models
 - **Self-host in one command** — `docker compose up`, or `bun run dev` with zero configuration
   (embedded Postgres, no external services required).
 
+## This fork (`BRYANN2K/doop`, branch `bryann2k/main`)
+
+Fork of [`kgoedecke/doop`](https://github.com/kgoedecke/doop), built for very large canvases
+(5,000+ frames), a self-hosted instance reachable over Tailscale only, and a design-to-code loop
+with local agents. Upstream PRs are merged one by one; conflicts are resolved by hand. Full notes,
+deploy steps and the upstream resync recipe: [FORK.md](FORK.md).
+
+### Merged upstream PRs
+
+| PR   | What it brings                                                                          |
+| ---- | --------------------------------------------------------------------------------------- |
+| #412 | Off-screen frames are culled and show their preview render instead of a blank box.      |
+| #314 | Level of detail: a budget of live frames, the rest render as server images.             |
+| #434 | The stage no longer re-renders on every zoom frame.                                     |
+| #435 | The stage box is read once per wheel flush.                                             |
+| #436 | The layout zoom is kept across small zoom changes.                                      |
+| #437 | Camera CSS variables are written only where they are read.                              |
+| #439 | Panel resize keeps its mark until the last dragged edge is released.                    |
+| #399 | A wedged Chromium renderer is relaunched instead of hanging every render.               |
+| #456 | Hardened renderer (leases, queues, pixel limits, `/healthz/renderer`), `.ico` favicons. |
+| #277 | `edit_frame_html` inserts the replacement text literally.                               |
+| #390 | No more ghost presences when two joins overlap.                                         |
+| #505 | Security: frame CSP, non-root container, gated agent style-guide writes.                |
+| #462 | Cut (⌘X) frames and layers through a shared canvas clipboard.                           |
+| #476 | Image placement at native size, HTTP upload-and-place endpoint.                         |
+| #457 | OpenCode in the Connect AI picker.                                                      |
+| #506 | External stylesheets synced into frames, with their `url()`s and fonts resolved.        |
+
+Dropped: **#299** (older component library). Merging it would add a second component system next
+to upstream's.
+
+### Features added in this fork
+
+- **⌘F across every page** — results grouped by frame, with thumbnails and a large preview.
+  Agents get the same search with the `find_in_canvas` MCP tool.
+- **Reference library** — store design-library items as references, find them with
+  `find_references`, and attach them to plan cards (thumbnails, remove button, Settings card).
+- **Plan-first Chat tab** — thread list, composer, plan card and repo chip. An editor's line in
+  the Chat tab asks Doop without an `@mention`, with a model picker per ask.
+- **Link a local project** (desktop app) — link a canvas to a folder on your Mac. The agent can
+  only list, read and search it (`repo_list`, `repo_read`, `repo_search`); the path stays on the
+  machine.
+- **Anti-slop lint** — a rules engine checks every frame (client iframe or server renderer), a
+  badge on the frame and a Quality section in the Inspector show the result, and the resident
+  agent fixes lint errors before finishing. Agents call `lint_frame`.
+- **Handoff to Stip** — a frame marked ready for dev builds a Stip change pack, previewed in the
+  Inspector and plan cards, then written into the linked repo by the desktop app's single write
+  command (`repo_write_change`). Agents call `create_handoff`.
+- **Live frames** (desktop app) — a frame that shows a local dev server (`localhost` only) with a
+  LIVE badge, created from the import picker or with `create_live_frame`, and snapshotted at the
+  frame's size.
+- **Drift review** — compare a frame with a live URL: pixel score, drift cards, a compare modal
+  and a CI webhook. Agents call `compare_with_url`; the desktop app fetches local URLs
+  (loopback GET/HEAD only).
+- **Self-hosting** — Docker image `ghcr.io/bryann2k/doop:bryann2k-main` built on every push, k3s
+  manifests in `deploy/k3s/` with a persistent volume for uploads, exposed through Tailscale
+  Serve only (no ingress, no Funnel).
+
 ## Works with any agent
 
 Doop isn't tied to one model vendor. Every agent below designs through the same MCP server, works

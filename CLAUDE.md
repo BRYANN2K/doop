@@ -11,6 +11,17 @@ render real HTML in sandboxed iframes. People edit in the browser; AI agents edi
 built-in MCP server, streaming designs in live. Everyone sees cursors, presence, frame edits, agent
 status, and an activity feed in realtime over one WebSocket room per canvas.
 
+## Fork rules (BRYANN2K/doop)
+
+- Work on `bryann2k/main` (or a `feat/*` branch merged into it). Never push to `upstream`
+  (`kgoedecke/doop`); `origin` is `BRYANN2K/doop`.
+- Read `FORK.md` first: merged and dropped upstream PRs, the resync recipe, the k3s deploy.
+- The fork's own features are listed in the README section "This fork". Update it when you add one.
+- The instance is Tailscale only (`tailscale serve`, k3s `ClusterIP`). Never add an ingress,
+  cloudflared or Funnel.
+- Never write secrets into the repo or to disk; `doop-secrets` lives in the cluster only.
+- Before a commit: `bun run typecheck && bun run lint && bun run test`.
+
 ## Tech stack
 
 TypeScript/React/Express/Postgres (drizzle), realtime over `ws`, MCP server for agent access, Tauri

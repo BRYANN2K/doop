@@ -1,4 +1,4 @@
-# Fork Doop — `BRYANN2K/doop`, branche `bryan/main`
+# Fork Doop — `BRYANN2K/doop`, branche `bryann2k/main`
 
 Fork de `kgoedecke/doop` (AGPL-3.0) axé sur la navigation et les performances
 des très grands canvases (5000+ frames), plus une poignée de fiabilisations et
@@ -48,17 +48,17 @@ conflits résolus à la main pour préserver l'intention de chaque côté.
 
 ```bash
 git fetch upstream
-git checkout bryan/main
+git checkout bryann2k/main
 git merge upstream/main
 # résoudre les conflits en gardant les intentions ci-dessus, puis :
 bun install && bun run typecheck && bun run lint && bun run test
-git push origin bryan/main   # jamais vers upstream
+git push origin bryann2k/main   # jamais vers upstream
 ```
 
 ## Image Docker
 
 Buildée en CI (`.github/workflows/docker.yml`) et publiée sur
-`ghcr.io/bryann2k/doop:bryan-main` à chaque push sur `bryan/main`.
+`ghcr.io/bryann2k/doop:bryann2k-main` à chaque push sur `bryann2k/main`.
 
 ## Déploiement k3s (Tailscale only)
 
@@ -104,8 +104,8 @@ directement (`imagePullPolicy: Always`). Au premier déploiement, le package
 containerd — si cela devait se reproduire :
 
 ```bash
-docker build --platform linux/amd64 -t ghcr.io/bryann2k/doop:bryan-main .
-docker save ghcr.io/bryann2k/doop:bryan-main | gzip > doop-image.tar.gz
+docker build --platform linux/amd64 -t ghcr.io/bryann2k/doop:bryann2k-main .
+docker save ghcr.io/bryann2k/doop:bryann2k-main | gzip > doop-image.tar.gz
 scp doop-image.tar.gz <vps>:/tmp/
 ssh <vps> 'sudo k3s ctr -n k8s.io images import /tmp/doop-image.tar.gz'
 ```
@@ -115,5 +115,5 @@ ssh <vps> 'sudo k3s ctr -n k8s.io images import /tmp/doop-image.tar.gz'
 - URL (tailnet only): https://bryann2k-infra-prod.tail35c61f.ts.net:8850
 - MCP: https://bryann2k-infra-prod.tail35c61f.ts.net:8850/mcp
 - Exposure: `tailscale serve --bg --https=8850 http://<doop ClusterIP>:4400` on bryann2k-infra. No Funnel, no cloudflared.
-- k3s namespace `doop`: `postgres-0` + `deploy/doop` (image `ghcr.io/bryann2k/doop:bryan-main`, public).
+- k3s namespace `doop`: `postgres-0` + `deploy/doop` (image `ghcr.io/bryann2k/doop:bryann2k-main`, public).
 - Dropped PR: #299 (component library). It would have added a second, parallel component system.
